@@ -2,7 +2,7 @@
 nixPkgs = ["python311", "python311Packages.pip", "gcc"]
 
 [phases.install]
-cmds = ["pip install --no-cache-dir -r requirements.txt"]
+cmds = ["pip install --break-system-packages --no-cache-dir -r requirements.txt"]
 
 [phases.build]
 cmds = ["mkdir -p /app/data", "echo 'Build completed successfully'"]
