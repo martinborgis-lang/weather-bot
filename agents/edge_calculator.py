@@ -1,5 +1,8 @@
 import asyncio
+import json
 import logging
+import os
+from datetime import datetime
 from typing import List
 from shared.models import WeatherMarket, WeatherForecast, TradeSignal, TemperatureRange
 from shared.cache import cache
@@ -127,6 +130,67 @@ def deduplicate_signals(signals: List[TradeSignal]) -> List[TradeSignal]:
     return list(seen.values())
 
 
+async def save_signals_to_file(signals: List[TradeSignal]):
+    """Sauvegarde les signaux de trading dans un fichier JSON"""
+    try:
+        data_dir = os.getenv("DATA_DIR", "./data")
+        os.makedirs(data_dir, exist_ok=True)
+        signals_file = os.path.join(data_dir, "signals.json")
+
+        # Charger les signaux existants
+        existing_signals = []
+        if os.path.exists(signals_file):
+            try:
+                with open(signals_file, 'r', encoding='utf-8') as f:
+                    existing_signals = json.load(f)
+            except:
+                existing_signals = []
+
+        # Convertir les nouveaux signaux en dict
+        timestamp = datetime.now().isoformat()
+        for signal in signals:
+            # Extract city from market title
+            city = "Unknown"
+            if hasattr(signal.market, 'title') and signal.market.title:
+                import re
+                city_match = re.search(r'in\s+([A-Z][a-z]+)', signal.market.title)
+                if city_match:
+                    city = city_match.group(1)
+
+            signal_dict = {
+                'timestamp': timestamp,
+                'condition_id': signal.market.condition_id,
+                'token_id': getattr(signal.temperature_range, 'token_id', signal.temperature_range.label),
+                'city': city,
+                'market_title': signal.market.title,
+                'temperature_label': signal.temperature_range.label,
+                'action': f"BUY_{signal.side}",
+                'side': signal.side,
+                'edge_value': signal.edge_points,
+                'model_probability': signal.model_probability,
+                'market_price': signal.market_implied_probability,
+                'bid_ask_spread': getattr(signal.market, 'bid_ask_spread', 0.01),
+                'confidence': signal.conviction_score,
+                'kelly_size_usdc': signal.recommended_size_usdc,
+                'kelly_fraction': signal.recommended_size_usdc / BANKROLL_USDC if BANKROLL_USDC > 0 else 0,
+                'reason': signal.reason
+            }
+            existing_signals.append(signal_dict)
+
+        # Garder seulement les 500 derniers signaux pour éviter un fichier trop gros
+        if len(existing_signals) > 500:
+            existing_signals = existing_signals[-500:]
+
+        # Sauvegarder
+        with open(signals_file, 'w', encoding='utf-8') as f:
+            json.dump(existing_signals, f, indent=2, ensure_ascii=False)
+
+        logger.debug(f"💾 {len(signals)} nouveaux signaux sauvegardés dans {signals_file}")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la sauvegarde des signaux: {e}")
+
+
 async def run_edge_loop():
     """
     Boucle principale de l'Edge Calculator.
@@ -164,6 +228,10 @@ async def run_edge_loop():
 
             # Sauvegarde dans le cache
             await cache.set('trade_signals', unique_signals)
+
+            # Sauvegarde dans le fichier JSON pour le dashboard
+            if unique_signals:
+                await save_signals_to_file(unique_signals)
 
             # Logging des résultats
             logger.info(f"Edge Calculator: {len(unique_signals)} opportunités détectées")

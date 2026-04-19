@@ -28,7 +28,10 @@ class PositionManager:
     def __init__(self):
         self.session = None
         self.last_summary_time = datetime.now()
-        self.positions_file = "positions.json"
+        # Use DATA_DIR environment variable
+        data_dir = os.getenv("DATA_DIR", "./data")
+        os.makedirs(data_dir, exist_ok=True)
+        self.positions_file = os.path.join(data_dir, "positions.json")
 
     async def start(self):
         """Démarre le gestionnaire de positions"""
@@ -76,8 +79,19 @@ class PositionManager:
             positions_data = []
             positions = await cache.get('open_positions', [])
             for pos in positions:
+                # Extract city from market_title if available
+                city = "Unknown"
+                if hasattr(pos, 'market_title') and pos.market_title:
+                    # Try to extract city from title (format: "Will the temperature in London...")
+                    import re
+                    city_match = re.search(r'in\s+([A-Z][a-z]+)', pos.market_title)
+                    if city_match:
+                        city = city_match.group(1)
+
                 pos_dict = {
-                    'market_condition_id': pos.market_condition_id,
+                    'condition_id': pos.market_condition_id,
+                    'token_id': getattr(pos, 'token_id', pos.market_condition_id),
+                    'city': city,
                     'market_title': pos.market_title,
                     'temperature_label': pos.temperature_label,
                     'side': pos.side,
@@ -89,12 +103,15 @@ class PositionManager:
                     'unrealized_pnl_pct': pos.unrealized_pnl_pct,
                     'opened_at': pos.opened_at.isoformat(),
                     'transaction_hash': pos.transaction_hash,
-                    'partial_sold': pos.partial_sold
+                    'partial_sold': pos.partial_sold,
+                    'target_date': getattr(pos, 'target_date', None)
                 }
                 positions_data.append(pos_dict)
 
             with open(self.positions_file, 'w', encoding='utf-8') as f:
                 json.dump(positions_data, f, indent=2, ensure_ascii=False)
+
+            logger.debug(f"💾 {len(positions_data)} positions sauvegardées dans {self.positions_file}")
 
         except Exception as e:
             logger.error(f"❌ Erreur lors de la sauvegarde des positions: {e}")

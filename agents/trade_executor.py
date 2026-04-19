@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import List
 from shared.models import TradeSignal, OpenPosition
@@ -62,6 +64,71 @@ class TradeExecutor:
         self.dry_run = os.environ.get('DRY_RUN', 'true').lower() == 'true'
 
         logger.info(f"TradeExecutor initialisé - DRY_RUN: {self.dry_run}")
+
+        # Setup data directory
+        self.data_dir = os.getenv("DATA_DIR", "./data")
+        os.makedirs(self.data_dir, exist_ok=True)
+
+    async def save_trade_to_history(self, trade_record: dict):
+        """Sauvegarde un trade dans l'historique JSON"""
+        try:
+            history_file = os.path.join(self.data_dir, "trade_history.json")
+
+            # Charger l'historique existant
+            existing_history = []
+            if os.path.exists(history_file):
+                try:
+                    with open(history_file, 'r', encoding='utf-8') as f:
+                        existing_history = json.load(f)
+                except:
+                    existing_history = []
+
+            # Extraire la ville du titre du marché
+            city = "Unknown"
+            signal = trade_record['signal']
+            if hasattr(signal.market, 'title') and signal.market.title:
+                city_match = re.search(r'in\s+([A-Z][a-z]+)', signal.market.title)
+                if city_match:
+                    city = city_match.group(1)
+
+            # Créer l'entrée d'historique
+            history_entry = {
+                'timestamp': trade_record['execution_time'].isoformat(),
+                'condition_id': signal.market.condition_id,
+                'token_id': getattr(signal.temperature_range, 'token_id', signal.temperature_range.label),
+                'city': city,
+                'market_title': signal.market.title,
+                'temperature_label': signal.temperature_range.label,
+                'side': signal.side,
+                'entry_price': signal.temperature_range.current_price,
+                'size_usdc': signal.recommended_size_usdc,
+                'size_tokens': trade_record['position'].size_tokens,
+                'opened_at': trade_record['execution_time'].isoformat(),
+                'transaction_hash': trade_record['position'].transaction_hash,
+                'dry_run': trade_record['dry_run'],
+                'order_id': trade_record['order_result'].get('orderId'),
+                'target_date': getattr(signal.market, 'target_date', None),
+                # Fields that will be filled when trade is closed
+                'exit_price': None,
+                'final_pnl': None,
+                'closed_at': None,
+                'exit_reason': None
+            }
+
+            existing_history.append(history_entry)
+
+            # Garder seulement les 1000 derniers trades pour éviter un fichier trop gros
+            if len(existing_history) > 1000:
+                existing_history = existing_history[-1000:]
+
+            # Sauvegarder
+            with open(history_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_history, f, indent=2, ensure_ascii=False)
+
+            logger.debug(f"💾 Trade sauvegardé dans l'historique: {city} {signal.side} {signal.recommended_size_usdc:.0f} USDC")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la sauvegarde de l'historique: {e}")
 
     async def _initialize_clob_client(self):
         """Initialise le client CLOB avec les credentials"""
@@ -166,6 +233,9 @@ class TradeExecutor:
             }
             executed_trades.append(trade_record)
             await cache.set('executed_trades', executed_trades)
+
+            # Sauvegarder dans l'historique JSON pour le dashboard
+            await self.save_trade_to_history(trade_record)
 
             return True
 

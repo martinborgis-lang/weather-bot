@@ -9,7 +9,8 @@
       "Bash(python test_scanner_v2.py)",
       "Bash(python test_forecaster.py)",
       "Bash(python test_edge.py)",
-      "Bash(python test_probabilities_debug.py)"
+      "Bash(python test_probabilities_debug.py)",
+      "Bash(dir \"agents\" /b)"
     ],
     "deny": [],
     "ask": []

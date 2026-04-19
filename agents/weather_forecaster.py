@@ -1,7 +1,9 @@
 import asyncio
 import aiohttp
+import json
 import logging
 import math
+import os
 import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
@@ -248,6 +250,55 @@ def detect_model_agreement(predictions: List[float]) -> int:
 
     return 0
 
+async def save_forecast_to_log(forecast: WeatherForecast, market: WeatherMarket):
+    """Sauvegarde un forecast dans le log JSON"""
+    try:
+        data_dir = os.getenv("DATA_DIR", "./data")
+        os.makedirs(data_dir, exist_ok=True)
+        log_file = os.path.join(data_dir, "forecast_log.json")
+
+        # Charger le log existant
+        existing_log = []
+        if os.path.exists(log_file):
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    existing_log = json.load(f)
+            except:
+                existing_log = []
+
+        # Créer l'entrée de log
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'condition_id': market.condition_id,
+            'city': forecast.city,
+            'target_date': forecast.target_date.isoformat(),
+            'ensemble_members_count': forecast.ensemble_members_count,
+            'models_agreement_count': forecast.models_agreement_count,
+            'agreement_percentage': (forecast.models_agreement_count / forecast.ensemble_members_count * 100) if forecast.ensemble_members_count > 0 else 0,
+            'probabilities_by_range': forecast.probabilities_by_range,
+            'market_title': getattr(market, 'title', 'Unknown'),
+            'unit': getattr(market, 'unit', 'C'),
+            'raw_predictions_sample': forecast.raw_predictions[:10] if forecast.raw_predictions else [],  # Échantillon des prédictions
+            'min_prediction': min(forecast.raw_predictions) if forecast.raw_predictions else None,
+            'max_prediction': max(forecast.raw_predictions) if forecast.raw_predictions else None,
+            'avg_prediction': sum(forecast.raw_predictions) / len(forecast.raw_predictions) if forecast.raw_predictions else None
+        }
+
+        existing_log.append(log_entry)
+
+        # Garder seulement les 1000 derniers forecasts pour éviter un fichier trop gros
+        if len(existing_log) > 1000:
+            existing_log = existing_log[-1000:]
+
+        # Sauvegarder
+        with open(log_file, 'w', encoding='utf-8') as f:
+            json.dump(existing_log, f, indent=2, ensure_ascii=False)
+
+        logger.debug(f"💾 Forecast sauvegardé: {forecast.city} {forecast.target_date.strftime('%Y-%m-%d')} - {forecast.ensemble_members_count} membres")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la sauvegarde du forecast: {e}")
+
 async def run_forecaster_loop():
     """
     Boucle principale du Weather Forecaster Agent.
@@ -306,6 +357,9 @@ async def run_forecaster_loop():
 
                     forecasts[market.condition_id] = forecast
                     processed_count += 1
+
+                    # Sauvegarder le forecast dans le log JSON pour le dashboard
+                    await save_forecast_to_log(forecast, market)
 
                     # Rate limiting entre les appels
                     await asyncio.sleep(RATE_LIMIT_DELAY)

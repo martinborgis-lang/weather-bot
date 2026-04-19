@@ -1,0 +1,38 @@
+[phases.setup]
+nixPkgs = ["python39", "pip"]
+onlyIncludeFiles = [
+    "requirements.txt",
+    "*.py",
+    "agents/",
+    "shared/",
+    "dashboard/",
+    "data/"
+]
+
+[phases.install]
+cmds = [
+    "pip install -r requirements.txt"
+]
+
+[phases.build]
+cmds = [
+    "mkdir -p /app/data",
+    "echo 'Build completed successfully'"
+]
+
+[start]
+cmd = "python run_all.py"
+
+[variables]
+DRY_RUN = "true"
+DATA_DIR = "/app/data"
+BANKROLL_USDC = "250.0"
+MAX_POSITION_SIZE_USDC = "25.0"
+KELLY_MULTIPLIER = "0.25"
+MIN_EDGE_THRESHOLD = "0.05"
+PORT = "8080"
+SCANNER_INTERVAL = "300"
+FORECASTER_INTERVAL = "300"
+EDGE_DETECTOR_INTERVAL = "180"
+POSITION_MANAGER_INTERVAL = "60"
+TRADE_EXECUTOR_INTERVAL = "30"
