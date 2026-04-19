@@ -109,16 +109,22 @@ class PositionManager:
                 positions_data.append(pos_dict)
 
             with open(self.positions_file, 'w', encoding='utf-8') as f:
-                json.dump(positions_data, f, indent=2, ensure_ascii=False)
+                json.dump(positions_data, f, indent=2, ensure_ascii=False, default=str)
 
             logger.debug(f"💾 {len(positions_data)} positions sauvegardées dans {self.positions_file}")
 
         except Exception as e:
             logger.error(f"❌ Erreur lors de la sauvegarde des positions: {e}")
 
-    async def get_current_price(self, token_id: str) -> float:
-        """Récupère le prix actuel d'un token via l'API Polymarket"""
+    async def get_current_price(self, token_id: str, market_condition_id: str) -> float:
+        """Récupère le prix actuel d'un token via l'API Polymarket avec fallback"""
         try:
+            # En mode DRY_RUN, utiliser le cache des marchés au lieu de l'API CLOB
+            dry_run = await cache.get('dry_run', True)
+            if dry_run:
+                return await self.get_price_from_cache(market_condition_id, token_id)
+
+            # Mode LIVE - tenter l'API CLOB
             url = "https://clob.polymarket.com/price"
             params = {
                 'token_id': token_id,
@@ -129,13 +135,40 @@ class PositionManager:
                 if response.status == 200:
                     data = await response.json()
                     return float(data.get('price', 0))
+                elif response.status == 404:
+                    logger.debug(f"💾 Token {token_id} non trouvé sur CLOB, utilisation du cache")
+                    return await self.get_price_from_cache(market_condition_id, token_id)
                 else:
                     logger.warning(f"⚠️ Erreur API prix pour {token_id}: {response.status}")
-                    return 0.0
+                    return await self.get_price_from_cache(market_condition_id, token_id)
 
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la récupération du prix pour {token_id}: {e}")
-            return 0.0
+            logger.debug(f"🔄 Fallback cache pour {token_id}: {e}")
+            return await self.get_price_from_cache(market_condition_id, token_id)
+
+    async def get_price_from_cache(self, market_condition_id: str, token_id: str) -> float:
+        """Récupère le prix depuis le cache des marchés weather"""
+        try:
+            weather_markets = await cache.get('weather_markets', [])
+
+            for market in weather_markets:
+                if market.condition_id == market_condition_id:
+                    # Chercher le token_id dans les ranges
+                    for temp_range in market.ranges:
+                        if getattr(temp_range, 'token_id', temp_range.label) == token_id:
+                            return temp_range.current_price
+
+                    # Fallback: retourner le prix du premier range si token_id non trouvé
+                    if market.ranges:
+                        return market.ranges[0].current_price
+
+            # Dernière fallback: retourner 0.15 (prix moyen)
+            logger.warning(f"⚠️ Market {market_condition_id} non trouvé dans le cache, utilisation prix par défaut")
+            return 0.15
+
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la récupération du prix depuis le cache: {e}")
+            return 0.15
 
     async def update_position_prices(self):
         """Met à jour les prix actuels de toutes les positions ouvertes"""
@@ -148,10 +181,9 @@ class PositionManager:
 
         async with position_lock:
             for position in positions:
-                # Récupérer le token_id depuis le market
-                # Note: Il faudra adapter selon la structure réelle de vos données
-                # Pour l'instant, on utilise market_condition_id comme token_id
-                current_price = await self.get_current_price(position.market_condition_id)
+                # Récupérer le prix actuel avec le fallback vers le cache
+                token_id = getattr(position, 'token_id', position.market_condition_id)
+                current_price = await self.get_current_price(token_id, position.market_condition_id)
 
                 if current_price > 0:
                     # Mettre à jour le prix

@@ -290,9 +290,9 @@ async def save_forecast_to_log(forecast: WeatherForecast, market: WeatherMarket)
         if len(existing_log) > 1000:
             existing_log = existing_log[-1000:]
 
-        # Sauvegarder
+        # Sauvegarder avec gestion des datetime
         with open(log_file, 'w', encoding='utf-8') as f:
-            json.dump(existing_log, f, indent=2, ensure_ascii=False)
+            json.dump(existing_log, f, indent=2, ensure_ascii=False, default=str)
 
         logger.debug(f"💾 Forecast sauvegardé: {forecast.city} {forecast.target_date.strftime('%Y-%m-%d')} - {forecast.ensemble_members_count} membres")
 

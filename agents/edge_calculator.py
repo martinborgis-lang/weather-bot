@@ -181,9 +181,9 @@ async def save_signals_to_file(signals: List[TradeSignal]):
         if len(existing_signals) > 500:
             existing_signals = existing_signals[-500:]
 
-        # Sauvegarder
+        # Sauvegarder avec gestion des datetime
         with open(signals_file, 'w', encoding='utf-8') as f:
-            json.dump(existing_signals, f, indent=2, ensure_ascii=False)
+            json.dump(existing_signals, f, indent=2, ensure_ascii=False, default=str)
 
         logger.debug(f"💾 {len(signals)} nouveaux signaux sauvegardés dans {signals_file}")
 

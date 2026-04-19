@@ -121,9 +121,9 @@ class TradeExecutor:
             if len(existing_history) > 1000:
                 existing_history = existing_history[-1000:]
 
-            # Sauvegarder
+            # Sauvegarder avec gestion des datetime
             with open(history_file, 'w', encoding='utf-8') as f:
-                json.dump(existing_history, f, indent=2, ensure_ascii=False)
+                json.dump(existing_history, f, indent=2, ensure_ascii=False, default=str)
 
             logger.debug(f"💾 Trade sauvegardé dans l'historique: {city} {signal.side} {signal.recommended_size_usdc:.0f} USDC")
 
@@ -266,7 +266,7 @@ class TradeExecutor:
                 # Exécution du signal
                 if await self.execute_signal(signal):
                     successful_executions += 1
-                    logger.info(f"Signal exécuté avec succès: edge={signal.edge_points:.2f}bp, "
+                    logger.info(f"Signal exécuté avec succès: edge={signal.edge_points:.1%}, "
                                f"size={signal.recommended_size_usdc:.2f} USDC")
                 else:
                     logger.error(f"Échec d'exécution du signal: {signal.market.title} - {signal.temperature_range.label}")
