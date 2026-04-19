@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile shared/models.py)",
+      "Bash(python -m py_compile shared/cache.py)",
+      "Bash(python -c \"from agents.trade_executor import TradeExecutor; print(''Imports OK'')\")",
+      "Bash(python -m py_compile \"agents\\position_manager.py\")",
+      "Bash(dir \"C:\\Users\\marti\\meteo\\agents\")",
+      "Bash(python test_scanner_v2.py)",
+      "Bash(python test_forecaster.py)",
+      "Bash(python test_edge.py)",
+      "Bash(python test_probabilities_debug.py)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

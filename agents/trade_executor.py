@@ -1,0 +1,257 @@
+import asyncio
+import logging
+import os
+from datetime import datetime
+from typing import List
+from shared.models import TradeSignal, OpenPosition
+from shared.cache import cache
+
+# Constantes
+EXECUTOR_INTERVAL = 300  # 5 min
+
+# Configuration du logger
+logger = logging.getLogger(__name__)
+
+# Placeholder pour ClobClient - À adapter selon la vraie librairie
+class MockClobClient:
+    def __init__(self, api_key, secret, passphrase, private_key):
+        self.api_key = api_key
+        self.secret = secret
+        self.passphrase = passphrase
+        self.private_key = private_key
+        self.dry_run = os.environ.get('DRY_RUN', 'true').lower() == 'true'
+
+        logger.info(f"ClobClient initialisé - DRY_RUN: {self.dry_run}")
+
+    def create_and_post_order(self, token_id, price, size, side, order_type):
+        """Crée et poste un ordre sur CLOB"""
+        if self.dry_run:
+            # Mock implementation pour DRY_RUN
+            logger.info(f"[DRY RUN] Ordre simulé: {side} {size} tokens à {price} USDC")
+            return {
+                "success": True,
+                "orderId": f"mock_order_{datetime.now().strftime('%H%M%S')}",
+                "hash": f"0xmockhash{datetime.now().strftime('%H%M%S')}"
+            }
+        else:
+            # TODO: Implémenter la vraie librairie CLOB ici
+            # Exemple d'appel réel (à adapter):
+            # return self.client.create_and_post_order(
+            #     token_id=token_id,
+            #     price=price,
+            #     size=size,
+            #     side=side,
+            #     order_type=order_type
+            # )
+            raise NotImplementedError("Vraie implémentation CLOB API à implémenter")
+
+class TradeExecutor:
+    """Exécute les signaux de trade via la CLOB API Polymarket"""
+
+    def __init__(self):
+        self.clob_client = None
+        self.running = False
+
+        # Chargement des credentials depuis .env
+        self.api_key = os.environ.get('CLOB_API_KEY')
+        self.secret = os.environ.get('CLOB_SECRET')
+        self.passphrase = os.environ.get('CLOB_PASSPHRASE')
+        self.private_key = os.environ.get('CLOB_PRIVATE_KEY')
+
+        # Configuration DRY_RUN
+        self.dry_run = os.environ.get('DRY_RUN', 'true').lower() == 'true'
+
+        logger.info(f"TradeExecutor initialisé - DRY_RUN: {self.dry_run}")
+
+    async def _initialize_clob_client(self):
+        """Initialise le client CLOB avec les credentials"""
+        if not all([self.api_key, self.secret, self.passphrase, self.private_key]):
+            if not self.dry_run:
+                raise ValueError("Credentials CLOB manquants dans .env")
+            else:
+                logger.warning("Credentials CLOB manquants - mode DRY_RUN uniquement")
+
+        self.clob_client = MockClobClient(
+            api_key=self.api_key,
+            secret=self.secret,
+            passphrase=self.passphrase,
+            private_key=self.private_key
+        )
+
+    async def _check_existing_position(self, signal: TradeSignal) -> bool:
+        """Vérifie si une position est déjà ouverte sur le même marché/range"""
+        open_positions = await cache.get('open_positions', [])
+
+        for position in open_positions:
+            if (position.market_condition_id == signal.market.condition_id and
+                position.temperature_label == signal.temperature_range.label):
+                logger.info(f"Position existante trouvée: {signal.market.title} - {signal.temperature_range.label}")
+                return True
+
+        return False
+
+    async def execute_signal(self, signal: TradeSignal) -> bool:
+        """Exécute un signal de trade
+
+        Returns:
+            bool: True si le trade a été exécuté avec succès, False sinon
+        """
+        try:
+            # Calcul de la taille en tokens
+            size_tokens = signal.recommended_size_usdc / signal.temperature_range.current_price
+
+            if self.dry_run:
+                # Mode simulation
+                logger.info(f"[DRY RUN] Exécution: {signal.side} {size_tokens:.4f} tokens "
+                           f"({signal.recommended_size_usdc:.2f} USDC) sur {signal.market.title} - "
+                           f"{signal.temperature_range.label} à {signal.temperature_range.current_price:.4f}")
+
+                # Création d'un ordre simulé
+                order_result = {
+                    "success": True,
+                    "orderId": f"dry_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    "hash": None
+                }
+                transaction_hash = None
+            else:
+                # Mode réel - appel CLOB API
+                logger.info(f"Exécution RÉELLE: {signal.side} {size_tokens:.4f} tokens "
+                           f"({signal.recommended_size_usdc:.2f} USDC) sur {signal.market.title} - "
+                           f"{signal.temperature_range.label}")
+
+                order_result = self.clob_client.create_and_post_order(
+                    token_id=signal.temperature_range.token_id,
+                    price=signal.temperature_range.current_price,
+                    size=size_tokens,
+                    side='BUY',  # Toujours BUY car on trade les tokens YES
+                    order_type='FOK'
+                )
+
+                if not order_result.get("success"):
+                    logger.error(f"Échec de l'ordre CLOB: {order_result}")
+                    return False
+
+                transaction_hash = order_result.get("hash")
+                logger.info(f"Trade exécuté: tx_hash={transaction_hash}, order_id={order_result.get('orderId')}")
+
+            # Création de la position ouverte
+            open_position = OpenPosition(
+                market_condition_id=signal.market.condition_id,
+                market_title=signal.market.title,
+                temperature_label=signal.temperature_range.label,
+                side=signal.side,
+                entry_price=signal.temperature_range.current_price,
+                current_price=signal.temperature_range.current_price,
+                size_usdc=signal.recommended_size_usdc,
+                size_tokens=size_tokens,
+                unrealized_pnl=0.0,
+                unrealized_pnl_pct=0.0,
+                opened_at=datetime.now(),
+                transaction_hash=transaction_hash
+            )
+
+            # Ajout à la liste des positions ouvertes
+            open_positions = await cache.get('open_positions', [])
+            open_positions.append(open_position)
+            await cache.set('open_positions', open_positions)
+
+            # Ajout à la liste des trades exécutés
+            executed_trades = await cache.get('executed_trades', [])
+            trade_record = {
+                "signal": signal,
+                "execution_time": datetime.now(),
+                "order_result": order_result,
+                "position": open_position,
+                "dry_run": self.dry_run
+            }
+            executed_trades.append(trade_record)
+            await cache.set('executed_trades', executed_trades)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Erreur lors de l'exécution du signal: {e}", exc_info=True)
+            return False
+
+    async def process_trade_signals(self):
+        """Traite tous les signaux de trade en attente"""
+        try:
+            # Récupération des signaux
+            trade_signals = await cache.get('trade_signals', [])
+
+            if not trade_signals:
+                logger.debug("Aucun signal de trade à traiter")
+                return
+
+            logger.info(f"Traitement de {len(trade_signals)} signal(s) de trade")
+
+            successful_executions = 0
+
+            for signal in trade_signals:
+                # Vérification des doublons
+                if await self._check_existing_position(signal):
+                    logger.info(f"Position déjà ouverte pour {signal.market.title} - {signal.temperature_range.label}, skip")
+                    continue
+
+                # Exécution du signal
+                if await self.execute_signal(signal):
+                    successful_executions += 1
+                    logger.info(f"Signal exécuté avec succès: edge={signal.edge_points:.2f}bp, "
+                               f"size={signal.recommended_size_usdc:.2f} USDC")
+                else:
+                    logger.error(f"Échec d'exécution du signal: {signal.market.title} - {signal.temperature_range.label}")
+
+            # Vidage du cache des signaux après traitement
+            await cache.set('trade_signals', [])
+
+            logger.info(f"Traitement terminé: {successful_executions}/{len(trade_signals)} signaux exécutés")
+
+        except Exception as e:
+            logger.error(f"Erreur lors du traitement des signaux: {e}", exc_info=True)
+
+    async def run_executor_loop(self):
+        """Boucle principale d'exécution des trades"""
+        logger.info(f"Démarrage du Trade Executor - Intervalle: {EXECUTOR_INTERVAL}s")
+
+        # Initialisation du client CLOB
+        await self._initialize_clob_client()
+
+        self.running = True
+
+        while self.running:
+            try:
+                await self.process_trade_signals()
+
+                # Attente avant le prochain cycle
+                await asyncio.sleep(EXECUTOR_INTERVAL)
+
+            except asyncio.CancelledError:
+                logger.info("Executor loop annulée")
+                break
+            except Exception as e:
+                logger.error(f"Erreur dans la boucle executor: {e}", exc_info=True)
+                # Attente plus courte en cas d'erreur pour retry
+                await asyncio.sleep(60)
+
+    async def stop(self):
+        """Arrête la boucle d'exécution"""
+        logger.info("Arrêt du Trade Executor")
+        self.running = False
+
+async def main():
+    """Point d'entrée pour tester l'executor"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    executor = TradeExecutor()
+
+    try:
+        await executor.run_executor_loop()
+    except KeyboardInterrupt:
+        await executor.stop()
+        logger.info("Executor arrêté par l'utilisateur")
+
+if __name__ == "__main__":
+    asyncio.run(main())

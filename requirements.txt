@@ -1,0 +1,30 @@
+# Weather Trading Bot Dependencies
+
+# HTTP Client
+aiohttp>=3.9.0
+
+# Date/Time handling
+python-dateutil>=2.8.2
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Logging
+structlog>=23.1.0
+
+# Math utilities
+scipy>=1.11.0
+
+# Optional: Notification services
+slack-sdk>=3.21.0
+
+# Optional: Enhanced JSON handling
+ujson>=5.8.0
+
+# Testing dependencies (for development)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

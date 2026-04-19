@@ -1,0 +1,10 @@
+﻿.env
+__pycache__/
+*.pyc
+data/positions.json
+data/signals.json
+data/trade_history.json
+*.log
+venv/
+.vscode/
+positions.json
