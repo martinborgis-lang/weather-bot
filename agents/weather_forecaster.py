@@ -12,10 +12,12 @@ from shared.cache import cache
 
 # Configuration
 FORECASTER_INTERVAL = 300  # 5 min
-RATE_LIMIT_DELAY = 1.2  # 1.2s entre appels API (plus conservateur)
+RATE_LIMIT_DELAY = 3.0  # 3.0s entre appels API (très conservateur)
 RETRY_DELAY = 60
 CACHE_TTL_SECONDS = 1800  # 30 min
-RETRY_AFTER_429 = 10  # 10s d'attente après 429
+CACHE_TTL_LONG = 3600  # 60 min pour dates lointaines
+RETRY_AFTER_429 = 30  # 30s d'attente après 429
+MAX_RETRIES_429 = 3  # Maximum 3 tentatives par ville
 
 # Import des coordonnées partagées
 from shared.cities import CITY_COORDINATES
@@ -23,8 +25,12 @@ from shared.cities import CITY_COORDINATES
 # Cache en mémoire pour les prévisions
 _forecast_cache: Dict[str, Tuple[List[float], float]] = {}
 
-# Semaphore pour rate limiting
+# Semaphore pour rate limiting (un seul appel API à la fois)
 _api_semaphore = asyncio.Semaphore(1)
+
+# Tracking des erreurs 429 par ville
+_city_errors = {}
+_last_429_time = None
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +38,37 @@ def _get_cache_key(lat: float, lon: float, target_date: datetime) -> str:
     """Génère une clé de cache pour les prévisions"""
     return f"{lat:.4f}_{lon:.4f}_{target_date.strftime('%Y-%m-%d')}"
 
-def _is_cache_valid(fetched_at: float) -> bool:
-    """Vérifie si le cache est encore valide (< 30 min)"""
-    return time.time() - fetched_at < CACHE_TTL_SECONDS
+def _is_cache_valid(fetched_at: float, target_date: datetime) -> bool:
+    """Vérifie si le cache est encore valide avec TTL adaptatif"""
+    now = time.time()
+    age_seconds = now - fetched_at
+
+    # TTL adaptatif : 60 min pour dates lointaines, 30 min pour dates proches
+    hours_until_target = (target_date - datetime.now()).total_seconds() / 3600
+    ttl = CACHE_TTL_LONG if hours_until_target > 24 else CACHE_TTL_SECONDS
+
+    return age_seconds < ttl
+
+def _get_cache_info(cache_key: str, target_date: datetime) -> dict:
+    """Retourne les infos du cache pour logs"""
+    if cache_key not in _forecast_cache:
+        return {"status": "MISS", "age_min": None, "expires_min": None}
+
+    predictions, fetched_at = _forecast_cache[cache_key]
+    now = time.time()
+    age_seconds = now - fetched_at
+
+    # TTL adaptatif
+    hours_until_target = (target_date - datetime.now()).total_seconds() / 3600
+    ttl = CACHE_TTL_LONG if hours_until_target > 24 else CACHE_TTL_SECONDS
+
+    expires_seconds = ttl - age_seconds
+
+    return {
+        "status": "HIT" if expires_seconds > 0 else "EXPIRED",
+        "age_min": age_seconds / 60,
+        "expires_min": max(0, expires_seconds / 60)
+    }
 
 async def fetch_ensemble_forecast(lat: float, lon: float, target_date: datetime) -> List[float]:
     """
@@ -51,22 +85,39 @@ async def fetch_ensemble_forecast(lat: float, lon: float, target_date: datetime)
     """
     cache_key = _get_cache_key(lat, lon, target_date)
 
-    # Vérifier le cache d'abord
+    # Récupérer infos cache pour logs
+    cache_info = _get_cache_info(cache_key, target_date)
+
+    # Vérifier le cache d'abord avec logs explicites
     if cache_key in _forecast_cache:
         predictions, fetched_at = _forecast_cache[cache_key]
-        if _is_cache_valid(fetched_at):
-            logger.info(f"Cache hit pour {cache_key}: {len(predictions)} prédictions")
+        if _is_cache_valid(fetched_at, target_date):
+            logger.info(f"Cache HIT: {cache_key} (expire dans {cache_info['expires_min']:.1f}min)")
             return predictions
         else:
             # Cache expiré, on le supprime
+            logger.info(f"Cache EXPIRED: {cache_key} (âgé de {cache_info['age_min']:.1f}min)")
             del _forecast_cache[cache_key]
+
+    logger.info(f"Cache MISS → API fetch: {cache_key}")
 
     # Rate limiting avec semaphore
     async with _api_semaphore:
         return await _fetch_ensemble_forecast_impl(lat, lon, target_date, cache_key)
 
 async def _fetch_ensemble_forecast_impl(lat: float, lon: float, target_date: datetime, cache_key: str) -> List[float]:
-    """Implémentation interne avec retry logic"""
+    """Implémentation interne avec retry logic avancée"""
+    global _last_429_time
+
+    city = cache_key.split('_')[2] if '_' in cache_key else "unknown"
+
+    # Vérifier si cette ville a déjà eu trop d'erreurs 429
+    if city in _city_errors and _city_errors[city] >= MAX_RETRIES_429:
+        last_error_time = _city_errors.get(f"{city}_last_error", 0)
+        if time.time() - last_error_time < 1800:  # Moins de 30 min
+            logger.warning(f"City {city} en pause (trop de 429), retry dans {(1800 - (time.time() - last_error_time))/60:.1f}min")
+            return []
+
     url = "https://ensemble-api.open-meteo.com/v1/ensemble"
     params = {
         'latitude': lat,
@@ -77,18 +128,30 @@ async def _fetch_ensemble_forecast_impl(lat: float, lon: float, target_date: dat
         'models': 'ecmwf_ifs025,gfs_seamless,icon_seamless'
     }
 
-    # Premier essai
-    predictions = await _try_fetch(url, params, target_date)
-
-    if predictions is None:
-        # Rate limit retry après 10s
-        logger.warning(f"Rate limit 429, attente {RETRY_AFTER_429}s avant retry...")
-        await asyncio.sleep(RETRY_AFTER_429)
+    # Tentatives avec retry progressif
+    for attempt in range(MAX_RETRIES_429):
         predictions = await _try_fetch(url, params, target_date)
 
-        if predictions is None:
-            logger.error("Échec définitif après retry 429")
-            return []
+        if predictions is not None:
+            # Succès - reset les erreurs pour cette ville
+            if city in _city_errors:
+                del _city_errors[city]
+            break
+
+        elif predictions is None:
+            # Rate limit 429
+            _last_429_time = time.time()
+            _city_errors[city] = _city_errors.get(city, 0) + 1
+            _city_errors[f"{city}_last_error"] = time.time()
+
+            wait_time = RETRY_AFTER_429 * (attempt + 1)  # Backoff exponentiel
+            logger.warning(f"Rate limit 429 pour {city} (tentative {attempt + 1}/{MAX_RETRIES_429}), attente {wait_time}s...")
+
+            if attempt < MAX_RETRIES_429 - 1:  # Pas d'attente après la dernière tentative
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Échec définitif pour {city} après {MAX_RETRIES_429} tentatives")
+                return []
 
     # Rate limiting entre les appels
     await asyncio.sleep(RATE_LIMIT_DELAY)
@@ -299,10 +362,25 @@ async def save_forecast_to_log(forecast: WeatherForecast, market: WeatherMarket)
     except Exception as e:
         logger.error(f"❌ Erreur lors de la sauvegarde du forecast: {e}")
 
+def _get_api_status() -> dict:
+    """Retourne le status de l'API Open-Meteo"""
+    global _last_429_time
+
+    cities_in_error = sum(1 for city, count in _city_errors.items()
+                         if not city.endswith('_last_error') and count >= MAX_RETRIES_429)
+
+    last_429_minutes = (time.time() - _last_429_time) / 60 if _last_429_time else None
+
+    return {
+        "cities_in_cache": len(_forecast_cache),
+        "cities_in_error": cities_in_error,
+        "last_429_minutes_ago": last_429_minutes
+    }
+
 async def run_forecaster_loop():
     """
-    Boucle principale du Weather Forecaster Agent.
-    Récupère les prévisions pour tous les marchés weather actifs.
+    Boucle principale du Weather Forecaster Agent avec cycle intelligent.
+    Récupère les prévisions seulement pour les villes dont le cache est expiré.
     """
     logger.info("Démarrage du Weather Forecaster Agent")
 
@@ -316,8 +394,33 @@ async def run_forecaster_loop():
                 await asyncio.sleep(FORECASTER_INTERVAL)
                 continue
 
+            # Status de l'API au début du cycle
+            api_status = _get_api_status()
+
+            # Filtrer les villes qui ont besoin d'un forecast (cache expiré ou absent)
+            cities_to_fetch = []
+            cities_in_cache = 0
+
+            for market in weather_markets:
+                if market.city not in CITY_COORDINATES:
+                    continue
+
+                coords = CITY_COORDINATES[market.city]
+                cache_key = _get_cache_key(coords['lat'], coords['lon'], market.target_date)
+                cache_info = _get_cache_info(cache_key, market.target_date)
+
+                if cache_info["status"] == "HIT":
+                    cities_in_cache += 1
+                else:
+                    cities_to_fetch.append(market)
+
+            logger.info(f"Forecaster: {cities_in_cache} villes en cache, {len(cities_to_fetch)} à fetch, "
+                       f"dernière erreur 429 il y a {api_status['last_429_minutes_ago']:.1f}min"
+                       if api_status['last_429_minutes_ago'] else "aucune erreur 429 récente")
+
             forecasts = {}
             processed_count = 0
+            cache_hits = 0
 
             for market in weather_markets:
                 try:
@@ -328,7 +431,7 @@ async def run_forecaster_loop():
 
                     coords = CITY_COORDINATES[market.city]
 
-                    # Récupérer les prévisions ensemble
+                    # Récupérer les prévisions ensemble (avec cache intelligent)
                     predictions = await fetch_ensemble_forecast(
                         coords['lat'],
                         coords['lon'],
@@ -338,6 +441,11 @@ async def run_forecaster_loop():
                     if not predictions:
                         logger.warning(f"Aucune prévision obtenue pour {market.city}")
                         continue
+
+                    # Compter cache hits vs fetches
+                    cache_key = _get_cache_key(coords['lat'], coords['lon'], market.target_date)
+                    if cache_key in _forecast_cache:
+                        cache_hits += 1
 
                     # Calculer les probabilités avec gestion de l'unité
                     probabilities = calculate_probabilities(predictions, market.ranges, market.unit)
@@ -361,9 +469,6 @@ async def run_forecaster_loop():
                     # Sauvegarder le forecast dans le log JSON pour le dashboard
                     await save_forecast_to_log(forecast, market)
 
-                    # Rate limiting entre les appels
-                    await asyncio.sleep(RATE_LIMIT_DELAY)
-
                 except Exception as e:
                     logger.error(f"Erreur lors du traitement du marché {market.condition_id}: {e}")
                     continue
@@ -371,7 +476,13 @@ async def run_forecaster_loop():
             # Stocker les prévisions dans le cache
             await cache.set('forecasts', forecasts)
 
-            logger.info(f"Forecaster: {processed_count}/{len(weather_markets)} marchés ont reçu un forecast ensemble")
+            # Statistiques finales avec ratio cache hit/miss
+            api_fetches = processed_count - cache_hits
+            cache_ratio = cache_hits / processed_count if processed_count > 0 else 0
+
+            logger.info(f"Forecaster: {processed_count}/{len(weather_markets)} marchés traités | "
+                       f"Cache ratio: {cache_hits}/{processed_count} ({cache_ratio:.1%}) | "
+                       f"API fetches: {api_fetches}")
 
         except Exception as e:
             logger.error(f"Erreur dans la boucle forecaster: {e}")
