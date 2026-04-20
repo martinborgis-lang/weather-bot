@@ -10,6 +10,7 @@ from shared.cache import cache
 
 # Constantes
 EXECUTOR_INTERVAL = 300  # 5 min
+BANKROLL_USDC = 250.0  # Capital total disponible
 
 # Configuration du logger
 logger = logging.getLogger(__name__)
@@ -157,13 +158,76 @@ class TradeExecutor:
 
         return False
 
+    async def _check_capital_available(self, signal_size: float) -> bool:
+        """Vérifie si le capital est suffisant pour exécuter le signal"""
+        open_positions = await cache.get('open_positions', [])
+        total_exposure = sum(pos.get('size_usdc', 0) for pos in open_positions if hasattr(pos, 'get') or hasattr(pos, 'size_usdc'))
+
+        # Si open_positions contient des objets OpenPosition, utiliser l'attribut
+        if open_positions and not hasattr(open_positions[0], 'get'):
+            total_exposure = sum(pos.size_usdc for pos in open_positions)
+
+        available = BANKROLL_USDC - total_exposure
+
+        if signal_size > available:
+            logger.warning(f"Signal skippé - capital insuffisant: besoin ${signal_size:.2f}, disponible ${available:.2f}")
+            return False
+
+        logger.debug(f"Capital OK: besoin ${signal_size:.2f}, disponible ${available:.2f} (exposition: ${total_exposure:.2f}/${BANKROLL_USDC})")
+        return True
+
+    async def _is_duplicate_position(self, signal: TradeSignal) -> bool:
+        """Vérifie qu'on n'a pas déjà la même position ouverte"""
+        open_positions = await cache.get('open_positions', [])
+
+        for pos in open_positions:
+            # Gestion des objets OpenPosition et des dictionnaires
+            market_id = pos.get('market_condition_id') if hasattr(pos, 'get') else getattr(pos, 'market_condition_id', None)
+            temp_label = pos.get('temperature_label') if hasattr(pos, 'get') else getattr(pos, 'temperature_label', None)
+            side = pos.get('side') if hasattr(pos, 'get') else getattr(pos, 'side', None)
+
+            if (market_id == signal.market.condition_id and
+                temp_label == signal.temperature_range.label and
+                side == signal.side):
+                return True
+
+        return False
+
     async def execute_signal(self, signal: TradeSignal) -> bool:
-        """Exécute un signal de trade
+        """Exécute un signal de trade avec vérifications complètes
 
         Returns:
             bool: True si le trade a été exécuté avec succès, False sinon
         """
         try:
+            # Extraire ville du titre pour les logs
+            city = "Unknown"
+            if hasattr(signal.market, 'title') and signal.market.title:
+                city_match = re.search(r'in\s+([A-Z][a-z]+)', signal.market.title)
+                if city_match:
+                    city = city_match.group(1)
+
+            # Log du signal reçu
+            logger.info(f"Signal REÇU: {city} {signal.temperature_range.label} {signal.side} "
+                       f"edge={signal.edge_points:.1%} size=${signal.recommended_size_usdc:.2f}")
+
+            # Vérification 1: Capital disponible
+            if not await self._check_capital_available(signal.recommended_size_usdc):
+                logger.info(f"→ SKIP (capital insuffisant)")
+                return False
+
+            # Vérification 2: Position dupliquée
+            if await self._is_duplicate_position(signal):
+                logger.info(f"→ SKIP (position déjà ouverte): {signal.market.title} {signal.temperature_range.label} {signal.side}")
+                return False
+
+            # Vérification 3: Position existante (ancienne méthode)
+            if await self._check_existing_position(signal):
+                logger.info(f"→ SKIP (position existante détectée)")
+                return False
+
+            logger.info(f"→ EXÉCUTION confirmée pour {city} {signal.temperature_range.label} {signal.side}")
+
             # Calcul de la taille en tokens
             size_tokens = signal.recommended_size_usdc / signal.temperature_range.current_price
 
@@ -253,28 +317,25 @@ class TradeExecutor:
                 logger.debug("Aucun signal de trade à traiter")
                 return
 
-            logger.info(f"Traitement de {len(trade_signals)} signal(s) de trade")
+            # Calcul exposition actuelle
+            open_positions = await cache.get('open_positions', [])
+            total_exposure = sum(pos.get('size_usdc', 0) for pos in open_positions if hasattr(pos, 'get') or hasattr(pos, 'size_usdc'))
+            if open_positions and not hasattr(open_positions[0], 'get'):
+                total_exposure = sum(pos.size_usdc for pos in open_positions)
+
+            logger.info(f"=== Cycle Trade Executor: {len(trade_signals)} signaux, exposition actuelle ${total_exposure:.2f}/${BANKROLL_USDC} ===")
 
             successful_executions = 0
 
             for signal in trade_signals:
-                # Vérification des doublons
-                if await self._check_existing_position(signal):
-                    logger.info(f"Position déjà ouverte pour {signal.market.title} - {signal.temperature_range.label}, skip")
-                    continue
-
-                # Exécution du signal
+                # L'exécution de chaque signal inclut maintenant toutes les vérifications
                 if await self.execute_signal(signal):
                     successful_executions += 1
-                    logger.info(f"Signal exécuté avec succès: edge={signal.edge_points:.1%}, "
-                               f"size={signal.recommended_size_usdc:.2f} USDC")
-                else:
-                    logger.error(f"Échec d'exécution du signal: {signal.market.title} - {signal.temperature_range.label}")
 
             # Vidage du cache des signaux après traitement
             await cache.set('trade_signals', [])
 
-            logger.info(f"Traitement terminé: {successful_executions}/{len(trade_signals)} signaux exécutés")
+            logger.info(f"=== Traitement terminé: {successful_executions}/{len(trade_signals)} signaux exécutés ===")
 
         except Exception as e:
             logger.error(f"Erreur lors du traitement des signaux: {e}", exc_info=True)
