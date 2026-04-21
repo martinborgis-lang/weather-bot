@@ -10,10 +10,22 @@ from shared.cache import cache
 
 # Constantes
 EXECUTOR_INTERVAL = 300  # 5 min
-BANKROLL_USDC = 250.0  # Capital total disponible
+BANKROLL_USDC = float(os.getenv("BANKROLL_USDC", "40.0"))  # Capital total disponible
 
 # Configuration du logger
 logger = logging.getLogger(__name__)
+
+def get_position_size(pos):
+    """Retourne size_usdc qu'il s'agisse d'un dict ou d'un objet OpenPosition"""
+    if isinstance(pos, dict):
+        return pos.get('size_usdc', 0)
+    return getattr(pos, 'size_usdc', 0)
+
+def get_position_field(pos, field, default=None):
+    """Helper générique pour accéder à un champ"""
+    if isinstance(pos, dict):
+        return pos.get(field, default)
+    return getattr(pos, field, default)
 
 # Placeholder pour ClobClient - À adapter selon la vraie librairie
 class MockClobClient:
@@ -151,8 +163,10 @@ class TradeExecutor:
         open_positions = await cache.get('open_positions', [])
 
         for position in open_positions:
-            if (position.market_condition_id == signal.market.condition_id and
-                position.temperature_label == signal.temperature_range.label):
+            market_id = get_position_field(position, 'market_condition_id')
+            temp_label = get_position_field(position, 'temperature_label')
+            if (market_id == signal.market.condition_id and
+                temp_label == signal.temperature_range.label):
                 logger.info(f"Position existante trouvée: {signal.market.title} - {signal.temperature_range.label}")
                 return True
 
@@ -161,12 +175,7 @@ class TradeExecutor:
     async def _check_capital_available(self, signal_size: float) -> bool:
         """Vérifie si le capital est suffisant pour exécuter le signal"""
         open_positions = await cache.get('open_positions', [])
-        total_exposure = sum(pos.get('size_usdc', 0) for pos in open_positions if hasattr(pos, 'get') or hasattr(pos, 'size_usdc'))
-
-        # Si open_positions contient des objets OpenPosition, utiliser l'attribut
-        if open_positions and not hasattr(open_positions[0], 'get'):
-            total_exposure = sum(pos.size_usdc for pos in open_positions)
-
+        total_exposure = sum(get_position_size(pos) for pos in open_positions)
         available = BANKROLL_USDC - total_exposure
 
         if signal_size > available:
@@ -181,10 +190,9 @@ class TradeExecutor:
         open_positions = await cache.get('open_positions', [])
 
         for pos in open_positions:
-            # Gestion des objets OpenPosition et des dictionnaires
-            market_id = pos.get('market_condition_id') if hasattr(pos, 'get') else getattr(pos, 'market_condition_id', None)
-            temp_label = pos.get('temperature_label') if hasattr(pos, 'get') else getattr(pos, 'temperature_label', None)
-            side = pos.get('side') if hasattr(pos, 'get') else getattr(pos, 'side', None)
+            market_id = get_position_field(pos, 'market_condition_id')
+            temp_label = get_position_field(pos, 'temperature_label')
+            side = get_position_field(pos, 'side')
 
             if (market_id == signal.market.condition_id and
                 temp_label == signal.temperature_range.label and
@@ -319,9 +327,7 @@ class TradeExecutor:
 
             # Calcul exposition actuelle
             open_positions = await cache.get('open_positions', [])
-            total_exposure = sum(pos.get('size_usdc', 0) for pos in open_positions if hasattr(pos, 'get') or hasattr(pos, 'size_usdc'))
-            if open_positions and not hasattr(open_positions[0], 'get'):
-                total_exposure = sum(pos.size_usdc for pos in open_positions)
+            total_exposure = sum(get_position_size(pos) for pos in open_positions)
 
             logger.info(f"=== Cycle Trade Executor: {len(trade_signals)} signaux, exposition actuelle ${total_exposure:.2f}/${BANKROLL_USDC} ===")
 

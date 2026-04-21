@@ -10,7 +10,9 @@
       "Bash(python test_forecaster.py)",
       "Bash(python test_edge.py)",
       "Bash(python test_probabilities_debug.py)",
-      "Bash(dir \"agents\" /b)"
+      "Bash(dir \"agents\" /b)",
+      "Bash(python -c \"from agents.trade_executor import TradeExecutor; print(''✅ Import OK'')\")",
+      "Bash(python -c \"from agents.trade_executor import TradeExecutor; print(''Import OK'')\")"
     ],
     "deny": [],
     "ask": []

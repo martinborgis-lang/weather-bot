@@ -10,14 +10,17 @@ from typing import List, Dict, Tuple, Optional
 from shared.models import WeatherMarket, WeatherForecast, TemperatureRange
 from shared.cache import cache
 
-# Configuration
+# Configuration avec API commerciale
 FORECASTER_INTERVAL = 300  # 5 min
-RATE_LIMIT_DELAY = 3.0  # 3.0s entre appels API (très conservateur)
+RATE_LIMIT_DELAY = 0.2  # 0.2s entre appels API (API commerciale)
 RETRY_DELAY = 60
-CACHE_TTL_SECONDS = 1800  # 30 min
-CACHE_TTL_LONG = 3600  # 60 min pour dates lointaines
-RETRY_AFTER_429 = 30  # 30s d'attente après 429
-MAX_RETRIES_429 = 3  # Maximum 3 tentatives par ville
+CACHE_TTL_SECONDS = 900  # 15 min (réduit grâce à l'API commerciale)
+RETRY_AFTER_429 = 5  # 5s d'attente après 429 (rare maintenant)
+MAX_RETRIES_429 = 2  # Maximum 2 tentatives par ville
+
+# Limites quotidiennes API commerciale
+DAILY_API_LIMIT = 28800  # ~1M/mois = 33k/jour, on prend 80% = 28.8k
+API_ALERT_THRESHOLD = 0.8  # Alerte à 80% du quota
 
 # Import des coordonnées partagées
 from shared.cities import CITY_COORDINATES
@@ -25,12 +28,12 @@ from shared.cities import CITY_COORDINATES
 # Cache en mémoire pour les prévisions
 _forecast_cache: Dict[str, Tuple[List[float], float]] = {}
 
-# Semaphore pour rate limiting (un seul appel API à la fois)
-_api_semaphore = asyncio.Semaphore(1)
+# Semaphore pour rate limiting (3 appels concurrents avec API commerciale)
+_api_semaphore = asyncio.Semaphore(3)
 
-# Tracking des erreurs 429 par ville
-_city_errors = {}
-_last_429_time = None
+# Compteur d'appels API quotidien
+_daily_api_calls = 0
+_last_reset_date = datetime.now().date()
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +42,10 @@ def _get_cache_key(lat: float, lon: float, target_date: datetime) -> str:
     return f"{lat:.4f}_{lon:.4f}_{target_date.strftime('%Y-%m-%d')}"
 
 def _is_cache_valid(fetched_at: float, target_date: datetime) -> bool:
-    """Vérifie si le cache est encore valide avec TTL adaptatif"""
+    """Vérifie si le cache est encore valide (15 min avec API commerciale)"""
     now = time.time()
     age_seconds = now - fetched_at
-
-    # TTL adaptatif : 60 min pour dates lointaines, 30 min pour dates proches
-    hours_until_target = (target_date - datetime.now()).total_seconds() / 3600
-    ttl = CACHE_TTL_LONG if hours_until_target > 24 else CACHE_TTL_SECONDS
-
-    return age_seconds < ttl
+    return age_seconds < CACHE_TTL_SECONDS
 
 def _get_cache_info(cache_key: str, target_date: datetime) -> dict:
     """Retourne les infos du cache pour logs"""
@@ -57,17 +55,48 @@ def _get_cache_info(cache_key: str, target_date: datetime) -> dict:
     predictions, fetched_at = _forecast_cache[cache_key]
     now = time.time()
     age_seconds = now - fetched_at
-
-    # TTL adaptatif
-    hours_until_target = (target_date - datetime.now()).total_seconds() / 3600
-    ttl = CACHE_TTL_LONG if hours_until_target > 24 else CACHE_TTL_SECONDS
-
-    expires_seconds = ttl - age_seconds
+    expires_seconds = CACHE_TTL_SECONDS - age_seconds
 
     return {
         "status": "HIT" if expires_seconds > 0 else "EXPIRED",
         "age_min": age_seconds / 60,
         "expires_min": max(0, expires_seconds / 60)
+    }
+
+def _reset_daily_counter():
+    """Reset le compteur quotidien si nécessaire"""
+    global _daily_api_calls, _last_reset_date
+
+    today = datetime.now().date()
+    if today != _last_reset_date:
+        _daily_api_calls = 0
+        _last_reset_date = today
+        logger.info(f"🔄 Reset compteur API quotidien: {today}")
+
+def _increment_api_counter():
+    """Incrémente le compteur d'appels API"""
+    global _daily_api_calls
+
+    _reset_daily_counter()
+    _daily_api_calls += 1
+
+    # Alerte si on approche de la limite
+    if _daily_api_calls / DAILY_API_LIMIT >= API_ALERT_THRESHOLD:
+        remaining = DAILY_API_LIMIT - _daily_api_calls
+        logger.warning(f"⚠️ Quota API: {_daily_api_calls}/{DAILY_API_LIMIT} ({_daily_api_calls/DAILY_API_LIMIT:.1%}) - {remaining} appels restants")
+
+def _get_api_usage_info() -> dict:
+    """Retourne les stats d'utilisation API"""
+    _reset_daily_counter()
+
+    usage_pct = _daily_api_calls / DAILY_API_LIMIT if DAILY_API_LIMIT > 0 else 0
+    remaining = max(0, DAILY_API_LIMIT - _daily_api_calls)
+
+    return {
+        "calls_today": _daily_api_calls,
+        "daily_limit": DAILY_API_LIMIT,
+        "usage_percent": usage_pct,
+        "remaining": remaining
     }
 
 async def fetch_ensemble_forecast(lat: float, lon: float, target_date: datetime) -> List[float]:
@@ -106,19 +135,9 @@ async def fetch_ensemble_forecast(lat: float, lon: float, target_date: datetime)
         return await _fetch_ensemble_forecast_impl(lat, lon, target_date, cache_key)
 
 async def _fetch_ensemble_forecast_impl(lat: float, lon: float, target_date: datetime, cache_key: str) -> List[float]:
-    """Implémentation interne avec retry logic avancée"""
-    global _last_429_time
+    """Implémentation interne simplifiée avec API commerciale"""
 
-    city = cache_key.split('_')[2] if '_' in cache_key else "unknown"
-
-    # Vérifier si cette ville a déjà eu trop d'erreurs 429
-    if city in _city_errors and _city_errors[city] >= MAX_RETRIES_429:
-        last_error_time = _city_errors.get(f"{city}_last_error", 0)
-        if time.time() - last_error_time < 1800:  # Moins de 30 min
-            logger.warning(f"City {city} en pause (trop de 429), retry dans {(1800 - (time.time() - last_error_time))/60:.1f}min")
-            return []
-
-    url = "https://ensemble-api.open-meteo.com/v1/ensemble"
+    url = "https://customer-api.open-meteo.com/v1/ensemble"
     params = {
         'latitude': lat,
         'longitude': lon,
@@ -128,48 +147,48 @@ async def _fetch_ensemble_forecast_impl(lat: float, lon: float, target_date: dat
         'models': 'ecmwf_ifs025,gfs_seamless,icon_seamless'
     }
 
-    # Tentatives avec retry progressif
+    # Ajouter clé API commerciale
+    api_key = os.getenv("OPENMETEO_API_KEY")
+    if api_key:
+        params['apikey'] = api_key
+    else:
+        logger.warning("OPENMETEO_API_KEY manquante - utilisation API gratuite limitée")
+
+    # Tentatives simples (rare d'avoir des erreurs avec l'API commerciale)
+    predictions = None
     for attempt in range(MAX_RETRIES_429):
         predictions = await _try_fetch(url, params, target_date)
 
         if predictions is not None:
-            # Succès - reset les erreurs pour cette ville
-            if city in _city_errors:
-                del _city_errors[city]
             break
+        elif attempt < MAX_RETRIES_429 - 1:
+            logger.warning(f"Erreur API (tentative {attempt + 1}/{MAX_RETRIES_429}), retry dans {RETRY_AFTER_429}s...")
+            await asyncio.sleep(RETRY_AFTER_429)
 
-        elif predictions is None:
-            # Rate limit 429
-            _last_429_time = time.time()
-            _city_errors[city] = _city_errors.get(city, 0) + 1
-            _city_errors[f"{city}_last_error"] = time.time()
+    if predictions is None:
+        logger.error(f"Échec définitif après {MAX_RETRIES_429} tentatives pour {cache_key}")
+        return []
 
-            wait_time = RETRY_AFTER_429 * (attempt + 1)  # Backoff exponentiel
-            logger.warning(f"Rate limit 429 pour {city} (tentative {attempt + 1}/{MAX_RETRIES_429}), attente {wait_time}s...")
-
-            if attempt < MAX_RETRIES_429 - 1:  # Pas d'attente après la dernière tentative
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(f"Échec définitif pour {city} après {MAX_RETRIES_429} tentatives")
-                return []
-
-    # Rate limiting entre les appels
+    # Rate limiting léger entre les appels
     await asyncio.sleep(RATE_LIMIT_DELAY)
 
     # Stocker en cache
     if predictions:
         _forecast_cache[cache_key] = (predictions, time.time())
-        logger.info(f"Cache stocké pour {cache_key}: {len(predictions)} prédictions")
+        logger.debug(f"Cache stocké pour {cache_key}: {len(predictions)} prédictions")
 
     return predictions
 
 async def _try_fetch(url: str, params: dict, target_date: datetime) -> Optional[List[float]]:
-    """Tentative d'appel API"""
+    """Tentative d'appel API avec compteur d'usage"""
     try:
+        # Incrémenter le compteur d'appels API
+        _increment_api_counter()
+
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params) as response:
                 if response.status == 429:
-                    logger.warning("Rate limit 429 détecté")
+                    logger.warning("Rate limit 429 détecté (rare avec API commerciale)")
                     return None
 
                 if response.status != 200:
@@ -198,7 +217,7 @@ async def _try_fetch(url: str, params: dict, target_date: datetime) -> Optional[
                         if target_index < len(values) and values[target_index] is not None:
                             predictions.append(float(values[target_index]))
 
-                logger.info(f"API fetch: {len(predictions)} prédictions pour {target_date_str}")
+                logger.debug(f"API fetch: {len(predictions)} prédictions pour {target_date_str}")
                 return predictions
 
     except Exception as e:
@@ -362,20 +381,6 @@ async def save_forecast_to_log(forecast: WeatherForecast, market: WeatherMarket)
     except Exception as e:
         logger.error(f"❌ Erreur lors de la sauvegarde du forecast: {e}")
 
-def _get_api_status() -> dict:
-    """Retourne le status de l'API Open-Meteo"""
-    global _last_429_time
-
-    cities_in_error = sum(1 for city, count in _city_errors.items()
-                         if not city.endswith('_last_error') and count >= MAX_RETRIES_429)
-
-    last_429_minutes = (time.time() - _last_429_time) / 60 if _last_429_time else None
-
-    return {
-        "cities_in_cache": len(_forecast_cache),
-        "cities_in_error": cities_in_error,
-        "last_429_minutes_ago": last_429_minutes
-    }
 
 async def run_forecaster_loop():
     """
@@ -395,7 +400,7 @@ async def run_forecaster_loop():
                 continue
 
             # Status de l'API au début du cycle
-            api_status = _get_api_status()
+            api_usage = _get_api_usage_info()
 
             # Filtrer les villes qui ont besoin d'un forecast (cache expiré ou absent)
             cities_to_fetch = []
@@ -414,9 +419,9 @@ async def run_forecaster_loop():
                 else:
                     cities_to_fetch.append(market)
 
-            logger.info(f"Forecaster: {cities_in_cache} villes en cache, {len(cities_to_fetch)} à fetch, "
-                       f"dernière erreur 429 il y a {api_status['last_429_minutes_ago']:.1f}min"
-                       if api_status['last_429_minutes_ago'] else "aucune erreur 429 récente")
+            logger.info(f"Forecaster: {len(cities_to_fetch)} cities to fetch, "
+                       f"API calls today: {api_usage['calls_today']}/{api_usage['daily_limit']} "
+                       f"({api_usage['usage_percent']:.1%})")
 
             forecasts = {}
             processed_count = 0
