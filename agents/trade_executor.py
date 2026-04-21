@@ -7,10 +7,10 @@ from datetime import datetime
 from typing import List
 from shared.models import TradeSignal, OpenPosition
 from shared.cache import cache
+from config import Config
 
 # Constantes
 EXECUTOR_INTERVAL = 300  # 5 min
-BANKROLL_USDC = float(os.getenv("BANKROLL_USDC", "40.0"))  # Capital total disponible
 
 # Configuration du logger
 logger = logging.getLogger(__name__)
@@ -176,13 +176,13 @@ class TradeExecutor:
         """Vérifie si le capital est suffisant pour exécuter le signal"""
         open_positions = await cache.get('open_positions', [])
         total_exposure = sum(get_position_size(pos) for pos in open_positions)
-        available = BANKROLL_USDC - total_exposure
+        available = Config.BANKROLL_USDC - total_exposure
 
         if signal_size > available:
             logger.warning(f"Signal skippé - capital insuffisant: besoin ${signal_size:.2f}, disponible ${available:.2f}")
             return False
 
-        logger.debug(f"Capital OK: besoin ${signal_size:.2f}, disponible ${available:.2f} (exposition: ${total_exposure:.2f}/${BANKROLL_USDC})")
+        logger.debug(f"Capital OK: besoin ${signal_size:.2f}, disponible ${available:.2f} (exposition: ${total_exposure:.2f}/${Config.BANKROLL_USDC})")
         return True
 
     async def _is_duplicate_position(self, signal: TradeSignal) -> bool:
@@ -330,7 +330,7 @@ class TradeExecutor:
             open_positions = await cache.get('open_positions', [])
             total_exposure = sum(get_position_size(pos) for pos in open_positions)
 
-            logger.info(f"=== Cycle Trade Executor: {len(trade_signals)} signaux, exposition actuelle ${total_exposure:.2f}/${BANKROLL_USDC} ===")
+            logger.info(f"=== Cycle Trade Executor: {len(trade_signals)} signaux, exposition actuelle ${total_exposure:.2f}/${Config.BANKROLL_USDC} ===")
 
             successful_executions = 0
 

@@ -6,16 +6,15 @@ from datetime import datetime
 from typing import List
 from shared.models import WeatherMarket, WeatherForecast, TradeSignal, TemperatureRange
 from shared.cache import cache
+from config import Config
 
-# Constantes de trading
-EDGE_MINIMUM = 0.20              # 20 points minimum
+# Constantes de trading (utiliser config centralisée)
+EDGE_MINIMUM = Config.EDGE_MINIMUM
 CONVICTION_MIN_MODELS = 3
 MAX_ENTRY_PRICE = 0.30           # pour BUY YES
 MIN_EXIT_PRICE_NO = 0.45         # pour BUY NO
 MIN_LIQUIDITY = 10000
-BANKROLL_USDC = 250.0            # configurable via .env plus tard
 MAX_POSITION_PCT = 0.02          # 2% du bankroll max par trade
-MAX_POSITION_USDC = 10.0         # plafond absolu
 
 # Intervalle de calcul
 EDGE_CALCULATOR_INTERVAL = 300   # 5 min
@@ -54,9 +53,9 @@ def calculate_edge(market: WeatherMarket, forecast: WeatherForecast) -> List[Tra
                 kelly_fraction = (edge_yes / odds) * 0.25 if odds > 0 else 0
 
                 size = min(
-                    BANKROLL_USDC * MAX_POSITION_PCT,
-                    BANKROLL_USDC * kelly_fraction,
-                    MAX_POSITION_USDC
+                    Config.BANKROLL_USDC * MAX_POSITION_PCT,
+                    Config.BANKROLL_USDC * kelly_fraction,
+                    Config.MAX_POSITION_USDC
                 )
 
                 if size >= 1.0:
@@ -90,9 +89,9 @@ def calculate_edge(market: WeatherMarket, forecast: WeatherForecast) -> List[Tra
                 kelly_fraction_no = (edge_no / odds_no) * 0.25 if odds_no > 0 else 0
 
                 size_no = min(
-                    BANKROLL_USDC * MAX_POSITION_PCT,
-                    BANKROLL_USDC * kelly_fraction_no,
-                    MAX_POSITION_USDC
+                    Config.BANKROLL_USDC * MAX_POSITION_PCT,
+                    Config.BANKROLL_USDC * kelly_fraction_no,
+                    Config.MAX_POSITION_USDC
                 )
 
                 if size_no >= 1.0:
@@ -174,7 +173,7 @@ async def save_signals_to_file(signals: List[TradeSignal]):
                 'bid_ask_spread': getattr(signal.market, 'bid_ask_spread', 0.01),
                 'confidence': signal.conviction_score,
                 'kelly_size_usdc': signal.recommended_size_usdc,
-                'kelly_fraction': signal.recommended_size_usdc / BANKROLL_USDC if BANKROLL_USDC > 0 else 0,
+                'kelly_fraction': signal.recommended_size_usdc / Config.BANKROLL_USDC if Config.BANKROLL_USDC > 0 else 0,
                 'reason': signal.reason
             }
             existing_signals.append(signal_dict)
