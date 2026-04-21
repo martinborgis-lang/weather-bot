@@ -378,111 +378,103 @@ async def save_forecast_to_log(forecast: WeatherForecast, market: WeatherMarket)
         logger.error(f"❌ Erreur lors de la sauvegarde du forecast: {e}")
 
 
+async def run_forecaster_cycle():
+    """
+    Exécute un seul cycle du Weather Forecaster.
+    Récupère les prévisions pour tous les marchés actifs.
+    """
+    try:
+        # Récupérer les marchés weather actifs
+        weather_markets = await cache.get('weather_markets', [])
+
+        if not weather_markets:
+            logger.info("Aucun marché weather actif trouvé")
+            return
+
+        # Status de l'API au début du cycle
+        api_usage = _get_api_usage_info()
+
+        logger.info(f"Forecaster: {len(weather_markets)} villes à scanner, appels aujourd'hui: {api_usage['calls_today']}/{api_usage['daily_limit']} ({api_usage['usage_percent']:.1%})")
+
+        forecasts = {}
+        processed_count = 0
+        cache_hits = 0
+
+        for market in weather_markets:
+            try:
+                # Vérifier si la ville est supportée
+                if market.city not in CITY_COORDINATES:
+                    logger.warning(f"Ville non supportée: {market.city}")
+                    continue
+
+                coords = CITY_COORDINATES[market.city]
+
+                # Récupérer les prévisions ensemble (avec cache intelligent)
+                predictions = await fetch_ensemble_forecast(
+                    coords['lat'],
+                    coords['lon'],
+                    market.target_date
+                )
+
+                if not predictions:
+                    logger.warning(f"Aucune prévision obtenue pour {market.city}")
+                    continue
+
+                # Compter cache hits vs fetches
+                cache_key = _get_cache_key(coords['lat'], coords['lon'], market.target_date)
+                if cache_key in _forecast_cache:
+                    cache_hits += 1
+
+                # Calculer les probabilités avec gestion de l'unité
+                probabilities = calculate_probabilities(predictions, market.ranges, market.unit)
+
+                # Détecter l'accord entre modèles
+                agreement_count = detect_model_agreement(predictions)
+
+                # Créer l'objet WeatherForecast
+                forecast = WeatherForecast(
+                    city=market.city,
+                    target_date=market.target_date,
+                    models_agreement_count=agreement_count,
+                    ensemble_members_count=len(predictions),
+                    probabilities_by_range=probabilities,
+                    raw_predictions=predictions
+                )
+
+                forecasts[market.condition_id] = forecast
+                processed_count += 1
+
+                # Sauvegarder le forecast dans le log JSON pour le dashboard
+                await save_forecast_to_log(forecast, market)
+
+            except Exception as e:
+                logger.error(f"Erreur lors du traitement du marché {market.condition_id}: {e}")
+                continue
+
+        # Stocker les prévisions dans le cache
+        await cache.set('forecasts', forecasts)
+
+        # Statistiques finales avec ratio cache hit/miss
+        api_fetches = processed_count - cache_hits
+        cache_ratio = cache_hits / processed_count if processed_count > 0 else 0
+
+        logger.info(f"Forecaster: {processed_count}/{len(weather_markets)} marchés traités | "
+                   f"Cache ratio: {cache_hits}/{processed_count} ({cache_ratio:.1%}) | "
+                   f"API fetches: {api_fetches}")
+
+    except Exception as e:
+        logger.error(f"Erreur dans le cycle forecaster: {e}")
+
+
 async def run_forecaster_loop():
     """
-    Boucle principale du Weather Forecaster Agent avec cycle intelligent.
-    Récupère les prévisions seulement pour les villes dont le cache est expiré.
+    Boucle principale du Weather Forecaster Agent.
     """
     logger.info("Démarrage du Weather Forecaster Agent")
 
     while True:
         try:
-            # Récupérer les marchés weather actifs
-            weather_markets = await cache.get('weather_markets', [])
-
-            if not weather_markets:
-                logger.info("Aucun marché weather actif trouvé")
-                await asyncio.sleep(FORECASTER_INTERVAL)
-                continue
-
-            # Status de l'API au début du cycle
-            api_usage = _get_api_usage_info()
-
-            # Filtrer les villes qui ont besoin d'un forecast (cache expiré ou absent)
-            cities_to_fetch = []
-            cities_in_cache = 0
-
-            for market in weather_markets:
-                if market.city not in CITY_COORDINATES:
-                    continue
-
-                coords = CITY_COORDINATES[market.city]
-                cache_key = _get_cache_key(coords['lat'], coords['lon'], market.target_date)
-                cache_info = _get_cache_info(cache_key, market.target_date)
-
-                if cache_info["status"] == "HIT":
-                    cities_in_cache += 1
-                else:
-                    cities_to_fetch.append(market)
-
-            logger.info(f"Forecaster: {len(weather_markets)} villes à scanner, appels aujourd'hui: {api_usage['calls_today']}/{api_usage['daily_limit']} ({api_usage['usage_percent']:.1%})")
-
-            forecasts = {}
-            processed_count = 0
-            cache_hits = 0
-
-            for market in weather_markets:
-                try:
-                    # Vérifier si la ville est supportée
-                    if market.city not in CITY_COORDINATES:
-                        logger.warning(f"Ville non supportée: {market.city}")
-                        continue
-
-                    coords = CITY_COORDINATES[market.city]
-
-                    # Récupérer les prévisions ensemble (avec cache intelligent)
-                    predictions = await fetch_ensemble_forecast(
-                        coords['lat'],
-                        coords['lon'],
-                        market.target_date
-                    )
-
-                    if not predictions:
-                        logger.warning(f"Aucune prévision obtenue pour {market.city}")
-                        continue
-
-                    # Compter cache hits vs fetches
-                    cache_key = _get_cache_key(coords['lat'], coords['lon'], market.target_date)
-                    if cache_key in _forecast_cache:
-                        cache_hits += 1
-
-                    # Calculer les probabilités avec gestion de l'unité
-                    probabilities = calculate_probabilities(predictions, market.ranges, market.unit)
-
-                    # Détecter l'accord entre modèles
-                    agreement_count = detect_model_agreement(predictions)
-
-                    # Créer l'objet WeatherForecast
-                    forecast = WeatherForecast(
-                        city=market.city,
-                        target_date=market.target_date,
-                        models_agreement_count=agreement_count,
-                        ensemble_members_count=len(predictions),
-                        probabilities_by_range=probabilities,
-                        raw_predictions=predictions
-                    )
-
-                    forecasts[market.condition_id] = forecast
-                    processed_count += 1
-
-                    # Sauvegarder le forecast dans le log JSON pour le dashboard
-                    await save_forecast_to_log(forecast, market)
-
-                except Exception as e:
-                    logger.error(f"Erreur lors du traitement du marché {market.condition_id}: {e}")
-                    continue
-
-            # Stocker les prévisions dans le cache
-            await cache.set('forecasts', forecasts)
-
-            # Statistiques finales avec ratio cache hit/miss
-            api_fetches = processed_count - cache_hits
-            cache_ratio = cache_hits / processed_count if processed_count > 0 else 0
-
-            logger.info(f"Forecaster: {processed_count}/{len(weather_markets)} marchés traités | "
-                       f"Cache ratio: {cache_hits}/{processed_count} ({cache_ratio:.1%}) | "
-                       f"API fetches: {api_fetches}")
-
+            await run_forecaster_cycle()
         except Exception as e:
             logger.error(f"Erreur dans la boucle forecaster: {e}")
             await asyncio.sleep(RETRY_DELAY)

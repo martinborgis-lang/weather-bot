@@ -193,65 +193,73 @@ async def save_signals_to_file(signals: List[TradeSignal]):
         logger.error(f"❌ Erreur lors de la sauvegarde des signaux: {e}")
 
 
+async def run_edge_cycle():
+    """
+    Exécute un seul cycle de l'Edge Calculator.
+    Analyse les marchés et prédictions pour détecter des opportunités de trading.
+    """
+    try:
+        # Récupération des données depuis le cache
+        weather_markets = await cache.get('weather_markets', [])
+        forecasts = await cache.get('forecasts', {})
+
+        if not weather_markets:
+            logger.debug("Aucun marché météo disponible")
+            return
+
+        if not forecasts:
+            logger.debug("Aucune prédiction météo disponible")
+            return
+
+        # Calcul des signaux pour chaque marché ayant une prédiction
+        all_signals = []
+
+        for market in weather_markets:
+            if market.condition_id in forecasts:
+                forecast = forecasts[market.condition_id]
+                market_signals = calculate_edge(market, forecast)
+                all_signals.extend(market_signals)
+
+        # Déduplication des signaux
+        unique_signals = deduplicate_signals(all_signals)
+
+        # Sauvegarde dans le cache
+        await cache.set('trade_signals', unique_signals)
+
+        # Sauvegarde dans le fichier JSON pour le dashboard
+        if unique_signals:
+            await save_signals_to_file(unique_signals)
+
+        # Logging des résultats
+        logger.info(f"Edge Calculator: {len(unique_signals)} opportunités détectées")
+
+        for signal in unique_signals:
+            logger.info(
+                f"Signal: {signal.market.title} | "
+                f"{signal.side} {signal.temperature_range.label} | "
+                f"Edge +{signal.edge_points:.1%} | "
+                f"Size ${signal.recommended_size_usdc:.1f}"
+            )
+
+    except Exception as e:
+        logger.error(f"Erreur dans Edge Calculator: {e}", exc_info=True)
+
+
 async def run_edge_loop():
     """
     Boucle principale de l'Edge Calculator.
-    Analyse les marchés et prédictions pour détecter des opportunités de trading.
     """
     logger.info("Edge Calculator démarré")
 
     while True:
         try:
-            # Récupération des données depuis le cache
-            weather_markets = await cache.get('weather_markets', [])
-            forecasts = await cache.get('forecasts', {})
-
-            if not weather_markets:
-                logger.debug("Aucun marché météo disponible")
-                await asyncio.sleep(EDGE_CALCULATOR_INTERVAL)
-                continue
-
-            if not forecasts:
-                logger.debug("Aucune prédiction météo disponible")
-                await asyncio.sleep(EDGE_CALCULATOR_INTERVAL)
-                continue
-
-            # Calcul des signaux pour chaque marché ayant une prédiction
-            all_signals = []
-
-            for market in weather_markets:
-                if market.condition_id in forecasts:
-                    forecast = forecasts[market.condition_id]
-                    market_signals = calculate_edge(market, forecast)
-                    all_signals.extend(market_signals)
-
-            # Déduplication des signaux
-            unique_signals = deduplicate_signals(all_signals)
-
-            # Sauvegarde dans le cache
-            await cache.set('trade_signals', unique_signals)
-
-            # Sauvegarde dans le fichier JSON pour le dashboard
-            if unique_signals:
-                await save_signals_to_file(unique_signals)
-
-            # Logging des résultats
-            logger.info(f"Edge Calculator: {len(unique_signals)} opportunités détectées")
-
-            for signal in unique_signals:
-                logger.info(
-                    f"Signal: {signal.market.title} | "
-                    f"{signal.side} {signal.temperature_range.label} | "
-                    f"Edge +{signal.edge_points:.1%} | "
-                    f"Size ${signal.recommended_size_usdc:.1f}"
-                )
-
-            # Attendre avant la prochaine analyse
-            await asyncio.sleep(EDGE_CALCULATOR_INTERVAL)
-
+            await run_edge_cycle()
         except Exception as e:
             logger.error(f"Erreur dans Edge Calculator: {e}", exc_info=True)
             await asyncio.sleep(60)  # Attendre 1 minute en cas d'erreur
+
+        # Attendre avant la prochaine analyse
+        await asyncio.sleep(EDGE_CALCULATOR_INTERVAL)
 
 
 if __name__ == "__main__":
