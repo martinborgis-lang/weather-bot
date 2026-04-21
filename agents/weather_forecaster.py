@@ -10,16 +10,17 @@ from typing import List, Dict, Tuple, Optional
 from shared.models import WeatherMarket, WeatherForecast, TemperatureRange
 from shared.cache import cache
 
-# Configuration avec API commerciale
-FORECASTER_INTERVAL = 300  # 5 min
-RATE_LIMIT_DELAY = 0.2  # 0.2s entre appels API (API commerciale)
+# Configuration avec API gratuite
+FORECASTER_INTERVAL = 3600  # 1 heure
+RATE_LIMIT_DELAY = 3.0  # 3s entre appels API (API gratuite)
 RETRY_DELAY = 60
-CACHE_TTL_SECONDS = 900  # 15 min (réduit grâce à l'API commerciale)
-RETRY_AFTER_429 = 5  # 5s d'attente après 429 (rare maintenant)
+CACHE_TTL_SECONDS = 3600  # 1 heure (scan horaire)
+RETRY_AFTER_429 = 5  # 5s d'attente après 429
 MAX_RETRIES_429 = 2  # Maximum 2 tentatives par ville
 
-# Limites quotidiennes API commerciale
-DAILY_API_LIMIT = 28800  # ~1M/mois = 33k/jour, on prend 80% = 28.8k
+# Limites quotidiennes API gratuite
+DAILY_QUOTA_LIMIT = 10000  # Free tier
+DAILY_QUOTA_WARNING = 8000  # Warning à 80%
 API_ALERT_THRESHOLD = 0.8  # Alerte à 80% du quota
 
 # Import des coordonnées partagées
@@ -28,8 +29,8 @@ from shared.cities import CITY_COORDINATES
 # Cache en mémoire pour les prévisions
 _forecast_cache: Dict[str, Tuple[List[float], float]] = {}
 
-# Semaphore pour rate limiting (3 appels concurrents avec API commerciale)
-_api_semaphore = asyncio.Semaphore(3)
+# Semaphore pour rate limiting (1 appel concurrent avec API gratuite)
+_api_semaphore = asyncio.Semaphore(1)
 
 # Compteur d'appels API quotidien
 _daily_api_calls = 0
@@ -42,7 +43,7 @@ def _get_cache_key(lat: float, lon: float, target_date: datetime) -> str:
     return f"{lat:.4f}_{lon:.4f}_{target_date.strftime('%Y-%m-%d')}"
 
 def _is_cache_valid(fetched_at: float, target_date: datetime) -> bool:
-    """Vérifie si le cache est encore valide (15 min avec API commerciale)"""
+    """Vérifie si le cache est encore valide (1 heure avec API gratuite)"""
     now = time.time()
     age_seconds = now - fetched_at
     return age_seconds < CACHE_TTL_SECONDS
@@ -81,20 +82,20 @@ def _increment_api_counter():
     _daily_api_calls += 1
 
     # Alerte si on approche de la limite
-    if _daily_api_calls / DAILY_API_LIMIT >= API_ALERT_THRESHOLD:
-        remaining = DAILY_API_LIMIT - _daily_api_calls
-        logger.warning(f"⚠️ Quota API: {_daily_api_calls}/{DAILY_API_LIMIT} ({_daily_api_calls/DAILY_API_LIMIT:.1%}) - {remaining} appels restants")
+    if _daily_api_calls >= DAILY_QUOTA_WARNING:
+        remaining = DAILY_QUOTA_LIMIT - _daily_api_calls
+        logger.warning(f"⚠️ Quota API: {_daily_api_calls}/{DAILY_QUOTA_LIMIT} ({_daily_api_calls/DAILY_QUOTA_LIMIT:.1%}) - {remaining} appels restants")
 
 def _get_api_usage_info() -> dict:
     """Retourne les stats d'utilisation API"""
     _reset_daily_counter()
 
-    usage_pct = _daily_api_calls / DAILY_API_LIMIT if DAILY_API_LIMIT > 0 else 0
-    remaining = max(0, DAILY_API_LIMIT - _daily_api_calls)
+    usage_pct = _daily_api_calls / DAILY_QUOTA_LIMIT if DAILY_QUOTA_LIMIT > 0 else 0
+    remaining = max(0, DAILY_QUOTA_LIMIT - _daily_api_calls)
 
     return {
         "calls_today": _daily_api_calls,
-        "daily_limit": DAILY_API_LIMIT,
+        "daily_limit": DAILY_QUOTA_LIMIT,
         "usage_percent": usage_pct,
         "remaining": remaining
     }
@@ -135,9 +136,9 @@ async def fetch_ensemble_forecast(lat: float, lon: float, target_date: datetime)
         return await _fetch_ensemble_forecast_impl(lat, lon, target_date, cache_key)
 
 async def _fetch_ensemble_forecast_impl(lat: float, lon: float, target_date: datetime, cache_key: str) -> List[float]:
-    """Implémentation interne simplifiée avec API commerciale"""
+    """Implémentation interne avec API gratuite"""
 
-    url = "https://customer-api.open-meteo.com/v1/ensemble"
+    url = "https://ensemble-api.open-meteo.com/v1/ensemble"
     params = {
         'latitude': lat,
         'longitude': lon,
@@ -147,14 +148,9 @@ async def _fetch_ensemble_forecast_impl(lat: float, lon: float, target_date: dat
         'models': 'ecmwf_ifs025,gfs_seamless,icon_seamless'
     }
 
-    # Ajouter clé API commerciale
-    api_key = os.getenv("OPENMETEO_API_KEY")
-    if api_key:
-        params['apikey'] = api_key
-    else:
-        logger.warning("OPENMETEO_API_KEY manquante - utilisation API gratuite limitée")
+    # API gratuite - pas d'authentification nécessaire
 
-    # Tentatives simples (rare d'avoir des erreurs avec l'API commerciale)
+    # Tentatives avec gestion des limites API gratuite
     predictions = None
     for attempt in range(MAX_RETRIES_429):
         predictions = await _try_fetch(url, params, target_date)
@@ -188,7 +184,7 @@ async def _try_fetch(url: str, params: dict, target_date: datetime) -> Optional[
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params) as response:
                 if response.status == 429:
-                    logger.warning("Rate limit 429 détecté (rare avec API commerciale)")
+                    logger.warning("Rate limit 429 détecté - API gratuite")
                     return None
 
                 if response.status != 200:
@@ -419,9 +415,7 @@ async def run_forecaster_loop():
                 else:
                     cities_to_fetch.append(market)
 
-            logger.info(f"Forecaster: {len(cities_to_fetch)} cities to fetch, "
-                       f"API calls today: {api_usage['calls_today']}/{api_usage['daily_limit']} "
-                       f"({api_usage['usage_percent']:.1%})")
+            logger.info(f"Forecaster: {len(weather_markets)} villes à scanner, appels aujourd'hui: {api_usage['calls_today']}/{api_usage['daily_limit']} ({api_usage['usage_percent']:.1%})")
 
             forecasts = {}
             processed_count = 0

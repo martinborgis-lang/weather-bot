@@ -34,8 +34,8 @@ def load_config_from_env():
         'RATE_LIMIT_DELAY': float(os.getenv('RATE_LIMIT_DELAY', '1.2')),
 
         # Agent Intervals
-        'SCANNER_INTERVAL': int(os.getenv('SCANNER_INTERVAL', '300')),
-        'FORECASTER_INTERVAL': int(os.getenv('FORECASTER_INTERVAL', '300')),
+        'SCANNER_INTERVAL': int(os.getenv('SCANNER_INTERVAL', '900')),
+        'FORECASTER_INTERVAL': int(os.getenv('FORECASTER_INTERVAL', '3600')),
         'EDGE_DETECTOR_INTERVAL': int(os.getenv('EDGE_DETECTOR_INTERVAL', '180')),
         'POSITION_MANAGER_INTERVAL': int(os.getenv('POSITION_MANAGER_INTERVAL', '60')),
         'TRADE_EXECUTOR_INTERVAL': int(os.getenv('TRADE_EXECUTOR_INTERVAL', '30')),
