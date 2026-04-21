@@ -30,7 +30,7 @@ def load_config_from_env():
         'CACHE_TTL_SECONDS': int(os.getenv('CACHE_TTL_SECONDS', '1800')),
 
         # API Configuration
-        'POLYMARKET_API_URL': os.getenv('POLYMARKET_API_URL', 'https://gamma-api.polymarket.com'),
+        'CLOB_API_URL': os.getenv('CLOB_API_URL', 'https://gamma-api.polymarket.com'),
         'RATE_LIMIT_DELAY': float(os.getenv('RATE_LIMIT_DELAY', '1.2')),
 
         # Agent Intervals
@@ -275,7 +275,7 @@ def display_advanced_settings(config):
         st.write(f"**TTL cache:** {config['CACHE_TTL_SECONDS']}s ({config['CACHE_TTL_SECONDS']//60}min)")
 
         st.markdown("**🌐 API & Réseau**")
-        st.write(f"**URL Polymarket:** `{config['POLYMARKET_API_URL']}`")
+        st.write(f"**URL CLOB API:** `{config['CLOB_API_URL']}`")
         st.write(f"**Rate limit:** {config['RATE_LIMIT_DELAY']:.1f}s")
 
     with col2:
