@@ -6,7 +6,8 @@
       "Bash(python -c \"from main import WeatherBot; print(''Import OK'')\")",
       "Bash(python -c \"from api import app; print(''API import OK'')\")",
       "Bash(python -c \"from config import Config; print(''Config import OK'')\")",
-      "Bash(python -c \"\nimport asyncio\nfrom agents.market_scanner import MarketScanner\nfrom agents.trade_executor import TradeExecutor\nfrom config import Config\nprint(f''Scanner: {MarketScanner}'')\nprint(f''Executor: {TradeExecutor}'')\nprint(f''Config bankroll: {Config.BANKROLL_USDC}'')\nprint(''✅ Tous les imports fonctionnent'')\n\")"
+      "Bash(python -c \"\nimport asyncio\nfrom agents.market_scanner import MarketScanner\nfrom agents.trade_executor import TradeExecutor\nfrom config import Config\nprint(f''Scanner: {MarketScanner}'')\nprint(f''Executor: {TradeExecutor}'')\nprint(f''Config bankroll: {Config.BANKROLL_USDC}'')\nprint(''✅ Tous les imports fonctionnent'')\n\")",
+      "Bash(python test_sessions.py)"
     ],
     "deny": [],
     "ask": []

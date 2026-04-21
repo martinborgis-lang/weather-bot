@@ -32,6 +32,9 @@ class WeatherBot:
         self.trade_executor = TradeExecutor()
         self.position_manager = PositionManager()
 
+        # Sessions HTTP initialisées dans start()
+        self.scanner_session = None
+
         self.last_forecast_ts = 0
         self.forecast_interval = 3600  # 1h
         self.trading_interval = 900    # 15min
@@ -86,6 +89,45 @@ class WeatherBot:
         except Exception as e:
             logger.error(f"❌ Erreur position cycle: {e}", exc_info=True)
 
+    async def start_sessions(self):
+        """Initialise toutes les sessions HTTP des agents"""
+        logger.info("🔌 Initialisation des sessions HTTP...")
+
+        # MarketScanner : utilise async context manager
+        self.scanner_session = await self.scanner.__aenter__()
+
+        # PositionManager : utilise méthode start() mais sans la boucle
+        self.position_manager.session = await self._create_session()
+        await self.position_manager.load_positions_from_file()
+
+        # TradeExecutor : initialise le client CLOB
+        await self.trade_executor._initialize_clob_client()
+
+        logger.info("✅ Sessions HTTP initialisées")
+
+    async def _create_session(self):
+        """Crée une session aiohttp avec timeout"""
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=30)
+        return aiohttp.ClientSession(timeout=timeout)
+
+    async def stop_sessions(self):
+        """Ferme proprement toutes les sessions HTTP"""
+        logger.info("🔌 Fermeture des sessions HTTP...")
+
+        # MarketScanner
+        if self.scanner_session:
+            await self.scanner.__aexit__(None, None, None)
+
+        # PositionManager
+        if self.position_manager.session:
+            await self.position_manager.session.close()
+
+        # TradeExecutor
+        await self.trade_executor.stop()
+
+        logger.info("✅ Sessions fermées")
+
     async def run(self):
         logger.info("=" * 60)
         logger.info("🚀 WEATHER TRADING BOT POLYMARKET")
@@ -98,28 +140,36 @@ class WeatherBot:
         logger.info(f"🔄 Mode: {'LIVE TRADING' if not Config.DRY_RUN else 'DRY_RUN'}")
         logger.info("=" * 60)
 
-        while True:
-            try:
-                now = asyncio.get_event_loop().time()
+        try:
+            # Initialiser les sessions HTTP
+            await self.start_sessions()
 
-                # Trading cycle toutes les 15 min
-                if now - self.last_trading >= self.trading_interval:
-                    await self.trading_cycle()
-                    self.last_trading = now
+            while True:
+                try:
+                    now = asyncio.get_event_loop().time()
 
-                # Position management toutes les 5 min
-                if now - self.last_position >= self.position_interval:
-                    await self.position_cycle()
-                    self.last_position = now
+                    # Trading cycle toutes les 15 min
+                    if now - self.last_trading >= self.trading_interval:
+                        await self.trading_cycle()
+                        self.last_trading = now
 
-                await asyncio.sleep(30)  # check toutes les 30s
+                    # Position management toutes les 5 min
+                    if now - self.last_position >= self.position_interval:
+                        await self.position_cycle()
+                        self.last_position = now
 
-            except KeyboardInterrupt:
-                logger.info("🛑 Arrêt du bot demandé")
-                break
-            except Exception as e:
-                logger.error(f"❌ Erreur boucle principale: {e}", exc_info=True)
-                await asyncio.sleep(60)  # wait before retry
+                    await asyncio.sleep(30)  # check toutes les 30s
+
+                except KeyboardInterrupt:
+                    logger.info("🛑 Arrêt du bot demandé")
+                    break
+                except Exception as e:
+                    logger.error(f"❌ Erreur boucle principale: {e}", exc_info=True)
+                    await asyncio.sleep(60)  # wait before retry
+
+        finally:
+            # Fermer les sessions proprement
+            await self.stop_sessions()
 
 
 if __name__ == "__main__":
