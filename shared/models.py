@@ -25,6 +25,7 @@ class WeatherMarket:
     ranges: list[TemperatureRange]
     ends_at: datetime
     unit: str               # "C" ou "F" - détecté depuis les labels des ranges
+    resolution_datetime: Optional[datetime] = None
 
 @dataclass
 class WeatherForecast:
@@ -48,6 +49,7 @@ class TradeSignal:
     conviction_score: float          # 0.0-1.0
     recommended_size_usdc: float
     reason: str                      # description textuelle
+    resolution_datetime: Optional[datetime] = None
 
 @dataclass
 class OpenPosition:
@@ -65,3 +67,4 @@ class OpenPosition:
     opened_at: datetime
     transaction_hash: Optional[str]  # None si DRY_RUN
     partial_sold: bool = False  # Track si 50% déjà vendus pour take profit
+    resolution_datetime: Optional[datetime] = None

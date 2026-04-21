@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import json
 from pathlib import Path
+from datetime import datetime
 from config import Config
 
 app = FastAPI(title="Weather Bot API")
@@ -51,6 +52,52 @@ def signals():
 def trades():
     data = read_json("trade_history.json")
     return data[-200:]
+
+
+@app.get("/positions-detailed")
+def positions_detailed():
+    positions = read_json("positions.json")
+    now = datetime.utcnow()
+
+    enriched = []
+    for p in positions:
+        item = dict(p) if isinstance(p, dict) else p.__dict__
+
+        resolution = item.get('resolution_datetime')
+        if resolution:
+            try:
+                if isinstance(resolution, str):
+                    res_dt = datetime.fromisoformat(resolution.replace('Z', '+00:00'))
+                else:
+                    res_dt = resolution
+
+                delta = res_dt - now
+                seconds = delta.total_seconds()
+
+                if seconds > 0:
+                    hours = int(seconds / 3600)
+                    minutes = int((seconds % 3600) / 60)
+                    item['time_to_resolution'] = f"{hours}h{minutes:02d}"
+                    item['resolution_status'] = 'pending'
+                else:
+                    item['time_to_resolution'] = 'expired'
+                    item['resolution_status'] = 'resolved'
+            except Exception:
+                item['time_to_resolution'] = 'unknown'
+                item['resolution_status'] = 'unknown'
+        else:
+            item['time_to_resolution'] = 'unknown'
+            item['resolution_status'] = 'unknown'
+
+        enriched.append(item)
+
+    # Trier par heure de résolution (les plus proches en premier)
+    enriched.sort(
+        key=lambda x: x.get('resolution_datetime', '9999-99-99'),
+        reverse=False
+    )
+
+    return enriched
 
 
 @app.get("/stats")

@@ -246,6 +246,16 @@ class MarketScanner:
         # Utiliser le conditionId du premier market comme identifiant principal
         condition_id = markets[0].get('conditionId', event_data.get('slug', 'unknown'))
 
+        # Parse resolution datetime depuis endDate
+        resolution_datetime = None
+        end_date_str = event_data.get('endDate')
+        if end_date_str:
+            try:
+                resolution_datetime = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                resolution_datetime = resolution_datetime.replace(tzinfo=None)  # Remove timezone for consistency
+            except Exception as e:
+                logger.warning(f"Impossible de parser endDate {end_date_str}: {e}")
+
         return WeatherMarket(
             condition_id=condition_id,
             slug=event_data.get('slug', ''),
@@ -257,7 +267,8 @@ class MarketScanner:
             volume_usdc=float(event_data.get('volume', 0)),
             ranges=ranges,
             ends_at=ends_at,
-            unit=unit
+            unit=unit,
+            resolution_datetime=resolution_datetime
         )
 
     async def scan_weather_markets(self) -> List[WeatherMarket]:

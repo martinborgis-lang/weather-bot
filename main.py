@@ -35,7 +35,7 @@ class WeatherBot:
         # Sessions HTTP initialisées dans start()
         self.scanner_session = None
 
-        self.last_forecast_ts = 0
+        self.last_forecast_ts = None
         self.forecast_interval = 3600  # 1h
         self.trading_interval = 900    # 15min
         self.position_interval = 300   # 5min
@@ -60,8 +60,8 @@ class WeatherBot:
 
             # 2. Forecasts Open-Meteo (1x par heure)
             now = asyncio.get_event_loop().time()
-            if now - self.last_forecast_ts > self.forecast_interval:
-                logger.info("🌤️ Fetch forecasts Open-Meteo")
+            if self.last_forecast_ts is None or (now - self.last_forecast_ts > self.forecast_interval):
+                logger.info("🌤️ Fetch forecasts Open-Meteo (premier cycle ou cache expiré)")
                 # TODO: Créer un cycle simple pour forecaster
                 self.last_forecast_ts = now
             else:

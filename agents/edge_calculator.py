@@ -71,7 +71,8 @@ def calculate_edge(market: WeatherMarket, forecast: WeatherForecast) -> List[Tra
                         edge_points=edge_yes,
                         conviction_score=conviction,
                         recommended_size_usdc=size,
-                        reason=f"Modèles prédisent {model_prob:.1%} vs marché {market_prob:.1%} pour {temp_range.label}"
+                        reason=f"Modèles prédisent {model_prob:.1%} vs marché {market_prob:.1%} pour {temp_range.label}",
+                        resolution_datetime=market.resolution_datetime
                     )
                     signals.append(signal)
                     logger.debug(f"Signal YES détecté: {market.title} {temp_range.label} | Edge +{edge_yes:.1%} | Size ${size:.1f}")
@@ -106,7 +107,8 @@ def calculate_edge(market: WeatherMarket, forecast: WeatherForecast) -> List[Tra
                         edge_points=edge_no,
                         conviction_score=conviction,
                         recommended_size_usdc=size_no,
-                        reason=f"Modèles prédisent PAS {temp_range.label}: {model_prob_no:.1%} vs marché {market_prob_no:.1%}"
+                        reason=f"Modèles prédisent PAS {temp_range.label}: {model_prob_no:.1%} vs marché {market_prob_no:.1%}",
+                        resolution_datetime=market.resolution_datetime
                     )
                     signals.append(signal)
                     logger.debug(f"Signal NO détecté: {market.title} {temp_range.label} | Edge +{edge_no:.1%} | Size ${size_no:.1f}")

@@ -1,13 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir /b)",
-      "Bash(python -m py_compile main.py)",
-      "Bash(python -c \"from main import WeatherBot; print(''Import OK'')\")",
-      "Bash(python -c \"from api import app; print(''API import OK'')\")",
-      "Bash(python -c \"from config import Config; print(''Config import OK'')\")",
-      "Bash(python -c \"\nimport asyncio\nfrom agents.market_scanner import MarketScanner\nfrom agents.trade_executor import TradeExecutor\nfrom config import Config\nprint(f''Scanner: {MarketScanner}'')\nprint(f''Executor: {TradeExecutor}'')\nprint(f''Config bankroll: {Config.BANKROLL_USDC}'')\nprint(''✅ Tous les imports fonctionnent'')\n\")",
-      "Bash(python test_sessions.py)"
+      "Bash(python -c \"\nfrom api import positions_detailed\nfrom datetime import datetime\nimport json\nimport tempfile\nimport os\n\n# Créer un fichier de test temporaire\ntest_data = [\n    {\n        ''market_condition_id'': ''test1'',\n        ''market_title'': ''Test Market 1'',\n        ''temperature_label'': ''17°C'',\n        ''side'': ''YES'',\n        ''size_usdc'': 10.0,\n        ''resolution_datetime'': ''2026-04-22T23:59:59''\n    },\n    {\n        ''market_condition_id'': ''test2'',\n        ''market_title'': ''Test Market 2'',\n        ''temperature_label'': ''18°C'',\n        ''side'': ''NO'',\n        ''size_usdc'': 15.0,\n        ''resolution_datetime'': None\n    }\n]\n\n# Créer un répertoire temporaire\ntemp_dir = ''./test_data_temp''\nos.makedirs(temp_dir, exist_ok=True)\n\n# Sauvegarder les données de test\nwith open(f''{temp_dir}/positions.json'', ''w'') as f:\n    json.dump(test_data, f)\n\n# Temporairement changer DATA_DIR dans config\nfrom config import Config\noriginal_dir = Config.DATA_DIR\nConfig.DATA_DIR = temp_dir\n\n# Importer à nouveau l''API avec le nouveau DATA_DIR\nimport importlib\nimport api\nimportlib.reload(api)\n\ntry:\n    # Tester l''endpoint\n    result = api.positions_detailed()\n    print(''API test OK'')\n    print(f''Nombre de positions: {len(result)}'')\n    \n    for pos in result:\n        print(f\"\"Position {pos[''market_condition_id'']}: resolution_status={pos.get(''resolution_status'')}, time_to_resolution={pos.get(''time_to_resolution'')}\"\")\n        \nfinally:\n    # Nettoyer\n    Config.DATA_DIR = original_dir\n    os.remove(f''{temp_dir}/positions.json'')\n    os.rmdir(temp_dir)\n\")"
     ],
     "deny": [],
     "ask": []

@@ -286,7 +286,8 @@ class TradeExecutor:
                 unrealized_pnl=0.0,
                 unrealized_pnl_pct=0.0,
                 opened_at=datetime.now(),
-                transaction_hash=transaction_hash
+                transaction_hash=transaction_hash,
+                resolution_datetime=signal.resolution_datetime
             )
 
             # Ajout à la liste des positions ouvertes
