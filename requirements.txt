@@ -1,34 +1,26 @@
-# Weather Trading Bot Dependencies
+# Weather Trading Bot Dependencies - Simplified
+
+# Polymarket CLOB
+py-clob-client==0.34.6
 
 # HTTP Client
-aiohttp>=3.9.0
-
-# Date/Time handling
-python-dateutil>=2.8.2
-
-# Data handling
-pandas>=2.0.0
-numpy>=1.24.0
+aiohttp==3.9.5
 
 # Environment variables
-python-dotenv>=1.0.0
+python-dotenv==1.0.1
 
-# Logging
-structlog>=23.1.0
+# Blockchain
+web3==6.20.0
+eth-account==0.13.0
 
-# Math utilities
-scipy>=1.11.0
+# HTTP requests
+requests==2.32.3
 
-# Streamlit Dashboard
-streamlit>=1.28.0
-plotly>=5.17.0
+# API monitoring
+fastapi==0.115.0
+uvicorn==0.32.0
 
-# Optional: Notification services
-slack-sdk>=3.21.0
-
-# Optional: Enhanced JSON handling
-ujson>=5.8.0
-
-# Testing dependencies (for development)
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
+# Notifications
+python-telegram-bot==21.3
+slack-sdk==3.27.1
+discord-webhook==1.3.1

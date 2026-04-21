@@ -1,23 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m py_compile shared/models.py)",
-      "Bash(python -m py_compile shared/cache.py)",
-      "Bash(python -c \"from agents.trade_executor import TradeExecutor; print(''Imports OK'')\")",
-      "Bash(python -m py_compile \"agents\\position_manager.py\")",
-      "Bash(dir \"C:\\Users\\marti\\meteo\\agents\")",
-      "Bash(python test_scanner_v2.py)",
-      "Bash(python test_forecaster.py)",
-      "Bash(python test_edge.py)",
-      "Bash(python test_probabilities_debug.py)",
-      "Bash(dir \"agents\" /b)",
-      "Bash(python -c \"from agents.trade_executor import TradeExecutor; print(''✅ Import OK'')\")",
-      "Bash(python -c \"from agents.trade_executor import TradeExecutor; print(''Import OK'')\")",
-      "Bash(python -m py_compile \"agents\\weather_forecaster.py\")",
-      "Bash(python -c \"from agents.weather_forecaster import WeatherForecaster; print(''✅ Import OK'')\")",
-      "Bash(python -c \"from agents.weather_forecaster import fetch_ensemble_forecast, run_forecaster_loop; print(''✅ Imports OK'')\")",
-      "Bash(python -c \"from agents.weather_forecaster import fetch_ensemble_forecast, run_forecaster_loop; print(''Imports OK'')\")",
-      "Bash(python -c \"\nimport asyncio\nimport logging\nfrom agents.weather_forecaster import fetch_ensemble_forecast\nfrom datetime import datetime, timedelta\n\nlogging.basicConfig(level=logging.INFO)\n\nasync def test_free_api():\n    try:\n        # Test avec Paris, demain\n        target_date = datetime.now() + timedelta(days=1)\n        predictions = await fetch_ensemble_forecast(48.8566, 2.3522, target_date)\n        print(f''API gratuite fonctionne: {len(predictions)} predictions recuperees'')\n        if predictions:\n            print(f''Exemple: {predictions[:3]}'')\n    except Exception as e:\n        print(f''Erreur API: {e}'')\n\nasyncio.run(test_free_api())\n\")"
+      "Bash(dir /b)",
+      "Bash(python -m py_compile main.py)",
+      "Bash(python -c \"from main import WeatherBot; print(''Import OK'')\")",
+      "Bash(python -c \"from api import app; print(''API import OK'')\")",
+      "Bash(python -c \"from config import Config; print(''Config import OK'')\")",
+      "Bash(python -c \"\nimport asyncio\nfrom agents.market_scanner import MarketScanner\nfrom agents.trade_executor import TradeExecutor\nfrom config import Config\nprint(f''Scanner: {MarketScanner}'')\nprint(f''Executor: {TradeExecutor}'')\nprint(f''Config bankroll: {Config.BANKROLL_USDC}'')\nprint(''✅ Tous les imports fonctionnent'')\n\")"
     ],
     "deny": [],
     "ask": []

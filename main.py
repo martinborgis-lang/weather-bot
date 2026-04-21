@@ -1,132 +1,127 @@
-#!/usr/bin/env python3
-"""
-Weather Trading Bot - Main Orchestration
-Lance tous les agents en parallèle pour le trading météo sur Polymarket
-"""
-
 import asyncio
 import logging
-import signal
-import sys
+import os
 from datetime import datetime
+from pathlib import Path
 
-# Imports des agents
-from agents.market_scanner import run_scanner_loop
-from agents.weather_forecaster import run_forecaster_loop
-from agents.edge_calculator import run_edge_loop
+from agents.market_scanner import MarketScanner
+# TODO: Importer les fonctions de cycle simple quand elles seront créées
+# from agents.weather_forecaster import run_forecaster_cycle
+# from agents.edge_calculator import run_edge_cycle
 from agents.trade_executor import TradeExecutor
-from agents.position_manager import start_position_manager
+from agents.position_manager import PositionManager
+from config import Config
+from shared.cache import cache
 
-# Configuration
-logger = logging.getLogger(__name__)
+# Logging
+Path("logs").mkdir(exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/bot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger('main')
 
-class WeatherTradingBot:
-    """Orchestrateur principal du bot de trading météo"""
 
+class WeatherBot:
     def __init__(self):
-        self.running = True
-        self.tasks = []
+        self.scanner = MarketScanner()
+        self.trade_executor = TradeExecutor()
+        self.position_manager = PositionManager()
 
-    async def start_all_agents(self):
-        """Lance tous les agents en parallèle"""
-        logger.info("🚀 Démarrage du Weather Trading Bot")
-        logger.info(f"📅 Heure de démarrage: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.last_forecast_ts = 0
+        self.forecast_interval = 3600  # 1h
+        self.trading_interval = 900    # 15min
+        self.position_interval = 300   # 5min
+
+        self.last_trading = 0
+        self.last_position = 0
+
+    async def trading_cycle(self):
+        """Cycle complet : scan → forecast → edges → trades"""
+        logger.info("=" * 60)
+        logger.info(f"🔄 CYCLE TRADING - {datetime.now().isoformat()}")
+        logger.info("=" * 60)
 
         try:
-            # Créer les tâches pour chaque agent
-            tasks = [
-                asyncio.create_task(run_scanner_loop(), name="MarketScanner"),
-                asyncio.create_task(run_forecaster_loop(), name="WeatherForecaster"),
-                asyncio.create_task(run_edge_loop(), name="EdgeCalculator"),
-                asyncio.create_task(self.run_trade_executor(), name="TradeExecutor"),
-                asyncio.create_task(start_position_manager(), name="PositionManager")
-            ]
+            # 1. Scanner marchés Polymarket
+            markets = await self.scanner.scan_weather_markets()
+            logger.info(f"✅ Scanner: {len(markets)} marchés weather")
 
-            self.tasks = tasks
+            if not markets:
+                logger.warning("Aucun marché, skip cycle")
+                return
 
-            # Log de démarrage de chaque agent
-            for task in tasks:
-                logger.info(f"📡 Agent {task.get_name()} démarré")
+            # 2. Forecasts Open-Meteo (1x par heure)
+            now = asyncio.get_event_loop().time()
+            if now - self.last_forecast_ts > self.forecast_interval:
+                logger.info("🌤️ Fetch forecasts Open-Meteo")
+                # TODO: Créer un cycle simple pour forecaster
+                self.last_forecast_ts = now
+            else:
+                remaining = self.forecast_interval - (now - self.last_forecast_ts)
+                logger.info(f"⏭️ Forecasts en cache (refresh dans {remaining/60:.0f}min)")
 
-            # Attendre que tous les agents tournent
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # 3. Calcul des edges
+            # TODO: Créer un cycle simple pour edge calculator
+            signals = await cache.get('trade_signals', [])
+            logger.info(f"✅ Edge Calculator: {len(signals)} signaux détectés")
+
+            # 4. Exécution des trades
+            if signals:
+                await self.trade_executor.process_trade_signals()
+            else:
+                logger.info("Aucun signal à exécuter")
 
         except Exception as e:
-            logger.error(f"❌ Erreur lors du démarrage des agents: {e}")
-            await self.stop()
+            logger.error(f"❌ Erreur cycle trading: {e}", exc_info=True)
 
-    async def run_trade_executor(self):
-        """Lance l'exécuteur de trades"""
-        executor = TradeExecutor()
-        await executor.run_executor_loop()
+    async def position_cycle(self):
+        """Gestion des positions ouvertes"""
+        try:
+            await self.position_manager.update_position_prices()
+        except Exception as e:
+            logger.error(f"❌ Erreur position cycle: {e}", exc_info=True)
 
-    async def stop(self):
-        """Arrête proprement tous les agents"""
-        logger.info("🛑 Arrêt du Weather Trading Bot demandé")
-        self.running = False
+    async def run(self):
+        logger.info("=" * 60)
+        logger.info("🚀 WEATHER TRADING BOT POLYMARKET")
+        logger.info("=" * 60)
+        logger.info(f"📁 Data: {Config.DATA_DIR}")
+        logger.info(f"💰 Bankroll: ${Config.BANKROLL_USDC}")
+        logger.info(f"💵 Position: ${Config.MIN_POSITION_USDC}-${Config.MAX_POSITION_USDC}")
+        logger.info(f"🎯 Edge min: {Config.EDGE_MINIMUM:.0%}")
+        logger.info(f"📊 Max positions: {Config.MAX_POSITIONS_COUNT}")
+        logger.info(f"🔄 Mode: {'LIVE TRADING' if not Config.DRY_RUN else 'DRY_RUN'}")
+        logger.info("=" * 60)
 
-        # Annuler toutes les tâches
-        for task in self.tasks:
-            if not task.done():
-                task.cancel()
-                logger.info(f"⏹️  Agent {task.get_name()} arrêté")
+        while True:
+            try:
+                now = asyncio.get_event_loop().time()
 
-        # Attendre que toutes les tâches se terminent
-        if self.tasks:
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+                # Trading cycle toutes les 15 min
+                if now - self.last_trading >= self.trading_interval:
+                    await self.trading_cycle()
+                    self.last_trading = now
 
-        logger.info("✅ Tous les agents arrêtés proprement")
+                # Position management toutes les 5 min
+                if now - self.last_position >= self.position_interval:
+                    await self.position_cycle()
+                    self.last_position = now
 
-# Instance globale du bot
-bot = WeatherTradingBot()
+                await asyncio.sleep(30)  # check toutes les 30s
 
-def setup_logging():
-    """Configure le système de logging"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+            except KeyboardInterrupt:
+                logger.info("🛑 Arrêt du bot demandé")
+                break
+            except Exception as e:
+                logger.error(f"❌ Erreur boucle principale: {e}", exc_info=True)
+                await asyncio.sleep(60)  # wait before retry
 
-    # Réduire le niveau de log pour aiohttp
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-
-    logger.info("📝 Système de logging configuré")
-
-def handle_shutdown(signum, frame):
-    """Gestionnaire de signaux pour arrêt propre"""
-    logger.info(f"🔔 Signal {signum} reçu, arrêt du bot...")
-    asyncio.create_task(bot.stop())
-
-async def main():
-    """Point d'entrée principal"""
-    # Configuration du logging
-    setup_logging()
-
-    # Configuration des signaux pour arrêt propre
-    signal.signal(signal.SIGINT, handle_shutdown)
-    signal.signal(signal.SIGTERM, handle_shutdown)
-
-    logger.info("=" * 50)
-    logger.info("🌤️  WEATHER TRADING BOT POLYMARKET")
-    logger.info("=" * 50)
-
-    try:
-        # Démarrer tous les agents
-        await bot.start_all_agents()
-
-    except KeyboardInterrupt:
-        logger.info("⌨️  Interruption clavier détectée")
-    except Exception as e:
-        logger.error(f"❌ Erreur fatale: {e}", exc_info=True)
-    finally:
-        await bot.stop()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Bot arrêté par l'utilisateur")
-    except Exception as e:
-        print(f"❌ Erreur fatale: {e}")
-        sys.exit(1)
+    bot = WeatherBot()
+    asyncio.run(bot.run())
