@@ -193,21 +193,36 @@ async def save_signals_to_file(signals: List[TradeSignal]):
         logger.error(f"❌ Erreur lors de la sauvegarde des signaux: {e}")
 
 
-async def run_edge_cycle():
+async def run_edge_cycle(markets=None, forecasts=None):
     """
     Exécute un seul cycle de l'Edge Calculator.
     Analyse les marchés et prédictions pour détecter des opportunités de trading.
+
+    Args:
+        markets: Liste optionnelle de marchés. Si None, récupère depuis le cache.
+        forecasts: Dict optionnel de prévisions. Si None, récupère depuis le cache.
     """
     try:
-        # Récupération des données depuis le cache
-        weather_markets = await cache.get('weather_markets', [])
-        forecasts = await cache.get('forecasts', {})
+        # Récupération des données depuis le cache ou paramètres
+        if markets is not None:
+            weather_markets = markets
+            logger.debug(f"Utilisation des {len(markets)} marchés passés en paramètre")
+        else:
+            weather_markets = await cache.get('weather_markets', [])
+            logger.debug(f"Récupération marchés depuis cache: {len(weather_markets)}")
+
+        if forecasts is not None:
+            forecasts_dict = forecasts
+            logger.debug(f"Utilisation des {len(forecasts)} prévisions passées en paramètre")
+        else:
+            forecasts_dict = await cache.get('forecasts', {})
+            logger.debug(f"Récupération prévisions depuis cache: {len(forecasts_dict)}")
 
         if not weather_markets:
             logger.debug("Aucun marché météo disponible")
             return
 
-        if not forecasts:
+        if not forecasts_dict:
             logger.debug("Aucune prédiction météo disponible")
             return
 
@@ -215,8 +230,8 @@ async def run_edge_cycle():
         all_signals = []
 
         for market in weather_markets:
-            if market.condition_id in forecasts:
-                forecast = forecasts[market.condition_id]
+            if market.condition_id in forecasts_dict:
+                forecast = forecasts_dict[market.condition_id]
                 market_signals = calculate_edge(market, forecast)
                 all_signals.extend(market_signals)
 

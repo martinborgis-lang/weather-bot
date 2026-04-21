@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python -m py_compile agents/weather_forecaster.py)",
       "Bash(python -c \"from agents.weather_forecaster import run_forecaster_cycle; from agents.edge_calculator import run_edge_cycle; print(''Imports OK'')\")",
-      "Bash(python -c \"from main import WeatherBot; print(''Main import OK'')\")"
+      "Bash(python -c \"from main import WeatherBot; print(''Main import OK'')\")",
+      "Bash(python -c \"from agents.weather_forecaster import run_forecaster_cycle; from agents.edge_calculator import run_edge_cycle; print(''✅ Imports OK'')\")",
+      "Bash(python test_scanner_forecaster_chain.py)"
     ],
     "deny": [],
     "ask": []

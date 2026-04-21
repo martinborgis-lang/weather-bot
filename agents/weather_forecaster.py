@@ -378,14 +378,22 @@ async def save_forecast_to_log(forecast: WeatherForecast, market: WeatherMarket)
         logger.error(f"❌ Erreur lors de la sauvegarde du forecast: {e}")
 
 
-async def run_forecaster_cycle():
+async def run_forecaster_cycle(markets=None):
     """
     Exécute un seul cycle du Weather Forecaster.
     Récupère les prévisions pour tous les marchés actifs.
+
+    Args:
+        markets: Liste optionnelle de marchés. Si None, récupère depuis le cache.
     """
     try:
         # Récupérer les marchés weather actifs
-        weather_markets = await cache.get('weather_markets', [])
+        if markets is not None:
+            weather_markets = markets
+            logger.debug(f"Utilisation des {len(markets)} marchés passés en paramètre")
+        else:
+            weather_markets = await cache.get('weather_markets', [])
+            logger.debug(f"Récupération depuis cache: {len(weather_markets)} marchés")
 
         if not weather_markets:
             logger.info("Aucun marché weather actif trouvé")
@@ -453,6 +461,7 @@ async def run_forecaster_cycle():
 
         # Stocker les prévisions dans le cache
         await cache.set('forecasts', forecasts)
+        logger.debug(f"Forecasts stockés dans le cache: {len(forecasts)} villes")
 
         # Statistiques finales avec ratio cache hit/miss
         api_fetches = processed_count - cache_hits

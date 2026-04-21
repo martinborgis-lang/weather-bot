@@ -52,6 +52,7 @@ class WeatherBot:
             # 1. Scanner marchés Polymarket
             markets = await self.scanner.scan_weather_markets()
             logger.info(f"✅ Scanner: {len(markets)} marchés weather")
+            logger.debug(f"Marchés détaillés: {[f'{m.city} ({m.condition_id[:8]})' for m in markets[:5]]}")
 
             if not markets:
                 logger.warning("Aucun marché, skip cycle")
@@ -61,15 +62,17 @@ class WeatherBot:
             now = asyncio.get_event_loop().time()
             if self.last_forecast_ts is None or (now - self.last_forecast_ts > self.forecast_interval):
                 logger.info("🌤️ Début fetch forecasts Open-Meteo (premier cycle ou cache expiré)")
-                await run_forecaster_cycle()
+                await run_forecaster_cycle(markets=markets)
                 self.last_forecast_ts = now
                 logger.info("✅ Fin fetch forecasts Open-Meteo")
             else:
                 remaining = self.forecast_interval - (now - self.last_forecast_ts)
                 logger.info(f"⏭️ Forecasts en cache (refresh dans {remaining/60:.0f}min)")
 
-            # 3. Calcul des edges
-            await run_edge_cycle()
+            # 3. Calcul des edges (récupérer les forecasts du cache)
+            forecasts = await cache.get('forecasts', {})
+            logger.debug(f"Forecasts récupérés du cache: {len(forecasts)} villes")
+            await run_edge_cycle(markets=markets, forecasts=forecasts)
             signals = await cache.get('trade_signals', [])
             logger.info(f"✅ Edge Calculator: {len(signals)} signaux détectés")
 
