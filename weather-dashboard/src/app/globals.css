@@ -1,0 +1,426 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
+/* Quantum Weather Terminal Design System - Dark Only Cyberpunk UI */
+:root {
+  /* Quantum Color Palette */
+  --color-primary: #0F172A;
+  --color-on-primary: #FFFFFF;
+  --color-secondary: #1E293B;
+  --color-accent: #22C55E;
+  --color-background: #020617;
+  --color-foreground: #F8FAFC;
+  --color-muted: #1A1E2F;
+  --color-border: #334155;
+  --color-destructive: #EF4444;
+  --color-ring: #0F172A;
+
+  /* Additional colors for trading UI */
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #DC2626;
+  --color-surface: #1F1F1F;
+  --color-text-muted: #9CA3AF;
+
+  /* Typography */
+  --font-heading: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+@theme inline {
+  --color-background: var(--color-background);
+  --color-foreground: var(--color-foreground);
+  --color-primary: var(--color-primary);
+  --color-secondary: var(--color-secondary);
+  --color-accent: var(--color-accent);
+  --color-muted: var(--color-muted);
+  --color-border: var(--color-border);
+  --color-destructive: var(--color-destructive);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-error: var(--color-error);
+  --color-surface: var(--color-surface);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-body);
+  font-feature-settings: "rlig" 1, "calt" 1;
+  line-height: 1.6;
+}
+
+/* Cyberpunk Effects */
+.neon-glow {
+  text-shadow: 0 0 5px var(--color-accent), 0 0 10px var(--color-accent), 0 0 15px var(--color-accent);
+}
+
+.neon-border {
+  border: 1px solid var(--color-accent);
+  box-shadow: 0 0 5px var(--color-accent), inset 0 0 5px rgba(34, 197, 94, 0.1);
+}
+
+.glitch {
+  position: relative;
+}
+
+.glitch:hover::before {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--color-accent);
+  overflow: hidden;
+  animation: glitch-1 0.3s ease-in-out;
+  z-index: -1;
+}
+
+.glitch:hover::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--color-error);
+  overflow: hidden;
+  animation: glitch-2 0.3s ease-in-out;
+  z-index: -2;
+}
+
+@keyframes glitch-1 {
+  0%, 100% { transform: translate(0); }
+  25% { transform: translate(-2px, 0); }
+  50% { transform: translate(2px, 0); }
+  75% { transform: translate(-1px, 0); }
+}
+
+@keyframes glitch-2 {
+  0%, 100% { transform: translate(0); }
+  25% { transform: translate(2px, 0); }
+  50% { transform: translate(-2px, 0); }
+  75% { transform: translate(1px, 0); }
+}
+
+.scanlines::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 50%,
+    rgba(34, 197, 94, 0.03) 50%
+  );
+  background-size: 100% 4px;
+  animation: scanlines 0.1s linear infinite;
+}
+
+@keyframes scanlines {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(4px); }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-muted);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-accent);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-success);
+}
+
+/* Smooth transitions */
+* {
+  transition: all 0.2s ease;
+}
+
+/* Focus states for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Mobile-first responsive design optimizations */
+@media (max-width: 768px) {
+  /* Reduce neon effects on mobile for performance */
+  .neon-glow {
+    text-shadow: 0 0 3px var(--color-accent), 0 0 5px var(--color-accent);
+  }
+
+  .neon-border {
+    box-shadow: 0 0 3px var(--color-accent);
+  }
+
+  /* Disable intensive animations on mobile */
+  .scanlines::before {
+    display: none;
+  }
+
+  .glitch:hover::before,
+  .glitch:hover::after {
+    display: none;
+  }
+
+  /* Optimize font sizes for mobile */
+  .text-6xl {
+    font-size: 2.5rem !important;
+    line-height: 1.2;
+  }
+
+  .text-4xl {
+    font-size: 1.875rem !important;
+  }
+
+  /* Improve touch targets */
+  button,
+  .btn,
+  [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 12px 16px;
+  }
+
+  /* Optimize spacing */
+  .space-y-6 > * + * {
+    margin-top: 1rem !important;
+  }
+
+  .gap-6 {
+    gap: 1rem !important;
+  }
+
+  /* Simplify grid layouts */
+  .grid-cols-3 {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  .grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  /* Optimize bento grid for mobile */
+  .lg\\:grid-cols-3 {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  .md\\:grid-cols-2 {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  /* Auto-sizing rows for mobile */
+  .auto-rows-\\[200px\\] {
+    grid-auto-rows: minmax(160px, auto) !important;
+  }
+
+  .md\\:auto-rows-\\[250px\\] {
+    grid-auto-rows: minmax(180px, auto) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Further mobile optimizations */
+  .px-6 {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  .py-6 {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+
+  /* Optimize text sizes */
+  .text-2xl {
+    font-size: 1.25rem !important;
+  }
+
+  .text-xl {
+    font-size: 1.125rem !important;
+  }
+
+  /* Hide non-essential elements on very small screens */
+  .hidden-xs {
+    display: none !important;
+  }
+}
+
+/* Tablet optimizations */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .lg\\:grid-cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* High DPI / Retina display optimizations */
+@media (min-resolution: 2dppx) {
+  .neon-glow {
+    text-shadow:
+      0 0 2px var(--color-accent),
+      0 0 4px var(--color-accent),
+      0 0 6px var(--color-accent);
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .scanlines::before {
+    animation: none;
+  }
+
+  .glitch,
+  .animate-pulse,
+  .animate-spin {
+    animation: none !important;
+  }
+
+  .neon-glow {
+    text-shadow: none;
+  }
+
+  .neon-border {
+    box-shadow: none;
+    border: 1px solid var(--color-accent);
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --color-accent: #00FF00;
+    --color-success: #00FF00;
+    --color-warning: #FFFF00;
+    --color-error: #FF0000;
+    --color-foreground: #FFFFFF;
+    --color-background: #000000;
+  }
+
+  .neon-glow,
+  .neon-border {
+    filter: none;
+  }
+}
+
+/* Performance optimizations */
+.gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* Prevent layout shifts */
+.aspect-ratio-16-9 {
+  aspect-ratio: 16 / 9;
+}
+
+.aspect-ratio-1-1 {
+  aspect-ratio: 1 / 1;
+}
+
+/* Container queries for better responsive design */
+.container {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .container {
+    max-width: 640px;
+  }
+}
+
+@media (min-width: 768px) {
+  .container {
+    max-width: 768px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .container {
+    max-width: 1024px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .container {
+    max-width: 1280px;
+  }
+}
+
+@media (min-width: 1536px) {
+  .container {
+    max-width: 1536px;
+  }
+}
+
+/* Loading states to prevent layout shifts */
+.loading-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-muted) 25%,
+    var(--color-surface) 50%,
+    var(--color-muted) 75%
+  );
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Optimize images for performance */
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+.lazy-img {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.lazy-img.loaded {
+  opacity: 1;
+}

@@ -8,3 +8,8 @@ data/trade_history.json
 venv/
 .vscode/
 positions.json
+node_modules/
+.next/
+dist/
+build/
+.env.local
