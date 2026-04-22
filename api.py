@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
+import asyncio
+import os
 from pathlib import Path
 from datetime import datetime
 from config import Config
@@ -15,6 +18,10 @@ app.add_middleware(
 )
 
 DATA_DIR = Path(Config.DATA_DIR)
+LOGS_PATH = Path("logs/bot.log")
+BOT_STATUS_FILE = DATA_DIR / "bot_status.json"
+PAUSE_FILE = DATA_DIR / ".pause"
+FORCE_CYCLE_FILE = DATA_DIR / ".force_cycle"
 
 
 def read_json(filename):
@@ -117,6 +124,101 @@ def stats():
         "bankroll": Config.BANKROLL_USDC,
         "dry_run": Config.DRY_RUN,
     }
+
+
+@app.get("/api/bot/status")
+def bot_status():
+    """Retourne le statut live du bot lu depuis data/bot_status.json"""
+    try:
+        if BOT_STATUS_FILE.exists():
+            with open(BOT_STATUS_FILE) as f:
+                status = json.load(f)
+            # Ajoute des infos calculées
+            status["paused"] = PAUSE_FILE.exists()
+            return status
+        return {
+            "running": False,
+            "last_cycle_at": None,
+            "uptime_seconds": 0,
+            "next_scan_at": None,
+            "dry_run": Config.DRY_RUN,
+            "errors_24h": 0,
+            "paused": PAUSE_FILE.exists(),
+            "bankroll_usdc": Config.BANKROLL_USDC,
+            "max_position_usdc": Config.MAX_POSITION_USDC,
+            "edge_minimum": Config.EDGE_MINIMUM,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/markets")
+def get_markets():
+    """Retourne les marchés scannés actuellement"""
+    try:
+        markets_file = DATA_DIR / "current_markets.json"
+        if markets_file.exists():
+            with open(markets_file) as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/forecasts")
+def get_forecasts():
+    """Retourne les prévisions météo actives"""
+    try:
+        forecasts_file = DATA_DIR / "forecast_log.json"
+        if forecasts_file.exists():
+            with open(forecasts_file) as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/bot/pause")
+def pause_bot():
+    """Met le bot en pause (il skip les cycles tant que le fichier existe)"""
+    PAUSE_FILE.touch()
+    return {"status": "paused", "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/api/bot/resume")
+def resume_bot():
+    """Retire la pause"""
+    if PAUSE_FILE.exists():
+        PAUSE_FILE.unlink()
+    return {"status": "resumed", "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/api/bot/force-cycle")
+def force_cycle():
+    """Force un nouveau cycle immédiatement"""
+    FORCE_CYCLE_FILE.touch()
+    return {"status": "cycle forced", "timestamp": datetime.now().isoformat()}
+
+
+@app.get("/api/logs/stream")
+async def stream_logs():
+    """SSE stream des logs bot.log en temps réel (tail -f)"""
+    async def log_generator():
+        if not LOGS_PATH.exists():
+            yield f"data: {json.dumps({'error': 'log file not found'})}\n\n"
+            return
+
+        with open(LOGS_PATH, "r", encoding='utf-8') as f:
+            # Skip to end for tail -f behavior
+            f.seek(0, 2)
+            while True:
+                line = f.readline()
+                if line:
+                    yield f"data: {json.dumps({'line': line.strip(), 'ts': datetime.now().isoformat()})}\n\n"
+                else:
+                    await asyncio.sleep(0.5)
+
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

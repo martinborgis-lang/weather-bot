@@ -50,14 +50,33 @@ export function PerformanceChart({
   const width = 400
   const padding = 40
 
-  const minValue = Math.min(...chartData.map(d => d.value))
-  const maxValue = Math.max(...chartData.map(d => d.value))
+  // Filter out invalid data points
+  const validChartData = chartData.filter(d =>
+    d && typeof d.value === 'number' && !isNaN(d.value) && isFinite(d.value)
+  )
+
+  if (validChartData.length === 0) {
+    return (
+      <div className={cn("flex items-center justify-center bg-surface/50 rounded-lg", className)} style={{ width, height }}>
+        <span className="text-sm text-muted-foreground">No valid data</span>
+      </div>
+    )
+  }
+
+  const minValue = Math.min(...validChartData.map(d => d.value))
+  const maxValue = Math.max(...validChartData.map(d => d.value))
   const valueRange = maxValue - minValue || 1
 
-  const points = chartData.map((item, index) => {
-    const x = padding + (index / (chartData.length - 1)) * (width - padding * 2)
+  const points = validChartData.map((item, index) => {
+    const x = padding + (index / (validChartData.length - 1)) * (width - padding * 2)
     const y = padding + (1 - (item.value - minValue) / valueRange) * (height - padding * 2)
-    return { ...item, x, y }
+
+    // Guard against NaN coordinates
+    return {
+      ...item,
+      x: isNaN(x) ? padding : x,
+      y: isNaN(y) ? height / 2 : y
+    }
   })
 
   const pathD = points.reduce((path, point, index) => {
@@ -92,7 +111,11 @@ export function PerformanceChart({
     setMousePos({ x: e.clientX, y: e.clientY })
   }
 
-  const performance = ((chartData[chartData.length - 1].value - chartData[0].value) / chartData[0].value) * 100
+  const firstValue = validChartData[0]?.value || 0
+  const lastValue = validChartData[validChartData.length - 1]?.value || 0
+  const performance = firstValue !== 0
+    ? ((lastValue - firstValue) / Math.abs(firstValue)) * 100
+    : 0
   const isPositive = performance > 0
 
   return (

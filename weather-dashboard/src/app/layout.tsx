@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { Providers } from "./providers";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -51,9 +52,11 @@ export default function RootLayout({
         <meta name="color-scheme" content="dark" />
       </head>
       <body className="min-h-full bg-background text-foreground scanlines">
-        <div className="relative min-h-screen">
-          {children}
-        </div>
+        <Providers>
+          <div className="relative min-h-screen">
+            {children}
+          </div>
+        </Providers>
       </body>
     </html>
   );

@@ -1,3 +1,5 @@
+"use client"
+
 import { BentoGrid, BentoCard } from "@/components/ui/bento-grid"
 import { MetricCard } from "@/components/ui/metric-card"
 import { DashboardLayout, DashboardHeader } from "@/components/layout/dashboard-layout"
@@ -7,8 +9,55 @@ import { Terminal, TerminalWidget } from "@/components/ui/terminal"
 import { PerformanceChart, RealtimePerformanceChart } from "@/components/charts/performance-chart"
 import { WeatherPositionsTable } from "@/components/ui/data-table"
 import { BotControlsWidget } from "@/components/ui/bot-controls"
+import { useDashboardData } from "@/hooks/useBotData"
+import { formatCurrency, formatPercentage } from "@/lib/utils"
 
 export default function DashboardPage() {
+  const { stats, botStatus, positions, trades, isLoading, isError } = useDashboardData()
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <DashboardLayout
+        header={
+          <DashboardHeader
+            title="Quantum Weather Terminal"
+            description="Loading..."
+          />
+        }
+      >
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-accent animate-pulse">Loading dashboard data...</div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  // Error state
+  if (isError) {
+    return (
+      <DashboardLayout
+        header={
+          <DashboardHeader
+            title="Quantum Weather Terminal"
+            description="Error loading dashboard"
+          />
+        }
+      >
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-destructive">Failed to load dashboard data. Check API connection.</div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  // Calculate derived metrics
+  const totalValue = stats.data?.bankroll || 0
+  const totalExposure = stats.data?.total_exposure || 0
+  const openPositions = stats.data?.open_positions || 0
+  const totalTrades = stats.data?.total_trades || 0
+  const isRunning = botStatus.data?.running && !botStatus.data?.paused
+
   return (
     <DashboardLayout
       header={
@@ -46,16 +95,16 @@ export default function DashboardPage() {
           >
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <div className="text-2xl font-mono">$2,450</div>
+                <div className="text-2xl font-mono">${totalValue.toFixed(0)}</div>
                 <div className="text-xs text-muted-foreground">Portfolio Value</div>
               </div>
               <div>
-                <div className="text-2xl font-mono text-success">+24.3%</div>
-                <div className="text-xs text-muted-foreground">Total Return</div>
+                <div className="text-2xl font-mono text-accent">{totalTrades}</div>
+                <div className="text-xs text-muted-foreground">Total Trades</div>
               </div>
               <div>
-                <div className="text-2xl font-mono text-accent">68.3%</div>
-                <div className="text-xs text-muted-foreground">Win Rate</div>
+                <div className="text-2xl font-mono text-success">${totalExposure.toFixed(1)}</div>
+                <div className="text-xs text-muted-foreground">Current Exposure</div>
               </div>
             </div>
           </BentoCard>
@@ -66,8 +115,14 @@ export default function DashboardPage() {
             description="Monitor and control bot status"
             size="md"
             header={
-              <div className="w-12 h-12 rounded-full bg-success/20 border-2 border-success animate-pulse flex items-center justify-center">
-                <div className="w-4 h-4 rounded-full bg-success"></div>
+              <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center ${
+                isRunning
+                  ? 'bg-success/20 border-success animate-pulse'
+                  : 'bg-destructive/20 border-destructive'
+              }`}>
+                <div className={`w-4 h-4 rounded-full ${
+                  isRunning ? 'bg-success' : 'bg-destructive'
+                }`}></div>
               </div>
             }
           >

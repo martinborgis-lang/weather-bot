@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from agents.market_scanner import MarketScanner
@@ -23,6 +24,32 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger('main')
+
+# Status tracking
+BOT_STATUS_FILE = Path("data/bot_status.json")
+PAUSE_FILE = Path("data/.pause")
+FORCE_CYCLE_FILE = Path("data/.force_cycle")
+START_TIME = datetime.now()
+
+
+def write_status(last_cycle_at=None, next_scan_at=None, errors_24h=0):
+    """Écrit l'état courant du bot dans un fichier lisible par l'API"""
+    try:
+        status = {
+            "running": True,
+            "last_cycle_at": last_cycle_at.isoformat() if last_cycle_at else None,
+            "uptime_seconds": int((datetime.now() - START_TIME).total_seconds()),
+            "next_scan_at": next_scan_at.isoformat() if next_scan_at else None,
+            "dry_run": Config.DRY_RUN,
+            "errors_24h": errors_24h,
+            "bankroll_usdc": Config.BANKROLL_USDC,
+            "max_position_usdc": Config.MAX_POSITION_USDC,
+            "edge_minimum": Config.EDGE_MINIMUM,
+        }
+        BOT_STATUS_FILE.parent.mkdir(exist_ok=True)
+        BOT_STATUS_FILE.write_text(json.dumps(status, indent=2))
+    except Exception as e:
+        logger.error(f"Error writing bot status: {e}")
 
 
 class WeatherBot:
@@ -147,19 +174,42 @@ class WeatherBot:
             # Initialiser les sessions HTTP
             await self.start_sessions()
 
+            # Écrire le statut initial
+            write_status()
+            logger.info("✅ Bot status initialized")
+
             while True:
                 try:
-                    now = asyncio.get_event_loop().time()
+                    # Check si pause
+                    if PAUSE_FILE.exists():
+                        logger.info("⏸️  Bot en pause (data/.pause existe), skip cycle")
+                        await asyncio.sleep(60)
+                        continue
 
-                    # Trading cycle toutes les 15 min
-                    if now - self.last_trading >= self.trading_interval:
+                    # Check si force cycle
+                    force = FORCE_CYCLE_FILE.exists()
+                    if force:
+                        logger.info("⚡ Force cycle demandé, exécution immédiate")
+                        FORCE_CYCLE_FILE.unlink()
+
+                    now = asyncio.get_event_loop().time()
+                    cycle_executed = False
+
+                    # Trading cycle toutes les 15 min (ou si force)
+                    if force or now - self.last_trading >= self.trading_interval:
                         await self.trading_cycle()
                         self.last_trading = now
+                        cycle_executed = True
 
                     # Position management toutes les 5 min
                     if now - self.last_position >= self.position_interval:
                         await self.position_cycle()
                         self.last_position = now
+
+                    # Mettre à jour le statut après les cycles
+                    if cycle_executed:
+                        next_scan = datetime.now() + timedelta(seconds=self.trading_interval)
+                        write_status(last_cycle_at=datetime.now(), next_scan_at=next_scan)
 
                     await asyncio.sleep(30)  # check toutes les 30s
 

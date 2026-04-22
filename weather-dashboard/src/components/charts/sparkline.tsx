@@ -50,15 +50,34 @@ export function Sparkline({
     )
   }
 
-  const min = Math.min(...currentData)
-  const max = Math.max(...currentData)
+  // Filter out NaN and invalid values
+  const validData = currentData.filter(value =>
+    typeof value === 'number' && !isNaN(value) && isFinite(value)
+  )
+
+  if (validData.length < 2) {
+    return (
+      <div className={cn("flex items-center justify-center bg-accent/5 rounded", className)} style={{ width, height }}>
+        <span className="text-xs text-muted-foreground">Invalid data</span>
+      </div>
+    )
+  }
+
+  const min = Math.min(...validData)
+  const max = Math.max(...validData)
   const range = max - min || 1
 
-  // Create path points
-  const points = currentData.map((value, index) => {
-    const x = (index / (currentData.length - 1)) * width
+  // Create path points with validation
+  const points = validData.map((value, index) => {
+    const x = (index / (validData.length - 1)) * width
     const y = height - ((value - min) / range) * height
-    return { x, y, value }
+
+    // Additional NaN guard
+    return {
+      x: isNaN(x) ? 0 : x,
+      y: isNaN(y) ? height / 2 : y,
+      value
+    }
   })
 
   const pathD = points.reduce((path, point, index) => {
@@ -71,7 +90,7 @@ export function Sparkline({
   // Create area path
   const areaD = `${pathD} L ${width} ${height} L 0 ${height} Z`
 
-  const gradientId = `sparkline-gradient-${Math.random().toString(36).substr(2, 9)}`
+  const [gradientId] = useState(() => `sparkline-gradient-${Math.random().toString(36).substr(2, 9)}`)
 
   return (
     <div className={cn("relative", className)}>

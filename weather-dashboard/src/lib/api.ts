@@ -60,20 +60,32 @@ class ApiClient {
     return this.request('/stats')
   }
 
-  // Bot Control (future endpoints to be added to FastAPI)
-  async startBot(): Promise<{ success: boolean; message: string }> {
-    // TODO: Add to FastAPI backend
-    return Promise.resolve({ success: true, message: "Bot start command sent" })
+  // Bot Status and Control
+  async getBotStatus(): Promise<BotStatus> {
+    return this.request('/api/bot/status')
   }
 
-  async stopBot(): Promise<{ success: boolean; message: string }> {
-    // TODO: Add to FastAPI backend
-    return Promise.resolve({ success: true, message: "Bot stop command sent" })
+  async getMarkets(): Promise<Market[]> {
+    return this.request('/api/markets')
   }
 
-  async pauseBot(): Promise<{ success: boolean; message: string }> {
-    // TODO: Add to FastAPI backend
-    return Promise.resolve({ success: true, message: "Bot pause command sent" })
+  async getForecasts(): Promise<Forecast[]> {
+    return this.request('/api/forecasts')
+  }
+
+  async pauseBot(): Promise<{ status: string; timestamp: string }> {
+    const response = await fetch(`${this.baseURL}/api/bot/pause`, { method: 'POST' })
+    return response.json()
+  }
+
+  async resumeBot(): Promise<{ status: string; timestamp: string }> {
+    const response = await fetch(`${this.baseURL}/api/bot/resume`, { method: 'POST' })
+    return response.json()
+  }
+
+  async forceCycle(): Promise<{ status: string; timestamp: string }> {
+    const response = await fetch(`${this.baseURL}/api/bot/force-cycle`, { method: 'POST' })
+    return response.json()
   }
 }
 
@@ -88,4 +100,53 @@ export const queryKeys = {
   trades: ['trades'],
   signals: ['signals'],
   stats: ['stats'],
+  botStatus: ['bot', 'status'],
+  markets: ['markets'],
+  forecasts: ['forecasts'],
 } as const
+
+// New interfaces for the API
+export interface BotStatus {
+  running: boolean;
+  last_cycle_at: string | null;
+  uptime_seconds: number;
+  next_scan_at: string | null;
+  dry_run: boolean;
+  errors_24h: number;
+  paused: boolean;
+  bankroll_usdc: number;
+  max_position_usdc: number;
+  edge_minimum: number;
+}
+
+export interface Market {
+  id: string;
+  condition_id?: string;
+  slug: string;
+  title: string;
+  city: string;
+  target_date: string;
+  resolution_source: string;
+  liquidity_usdc: number;
+  volume_usdc: number;
+  ranges: Array<{
+    min: number;
+    max: number;
+    tokens: Array<{
+      token_id: string;
+      outcome: string;
+      price: number;
+    }>;
+  }>;
+  ends_at: string;
+  unit: string;
+  resolution_datetime?: string;
+}
+
+export interface Forecast {
+  city: string;
+  target_date: string;
+  members: number[];
+  mean: number;
+  timestamp: string;
+}
