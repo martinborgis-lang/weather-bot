@@ -14,7 +14,7 @@ CONVICTION_MIN_MODELS = 3
 MAX_ENTRY_PRICE = 0.30           # pour BUY YES
 MIN_EXIT_PRICE_NO = 0.45         # pour BUY NO
 MIN_LIQUIDITY = 10000
-MAX_POSITION_PCT = 0.02          # 2% du bankroll max par trade
+MAX_POSITION_PCT = 0.05          # 5% du bankroll max par trade (ajuste pour petit bankroll)
 
 # Intervalle de calcul
 EDGE_CALCULATOR_INTERVAL = 300   # 5 min
@@ -58,7 +58,7 @@ def calculate_edge(market: WeatherMarket, forecast: WeatherForecast) -> List[Tra
                     Config.MAX_POSITION_USDC
                 )
 
-                if size >= 1.0:
+                if size >= Config.MIN_POSITION_USDC:
                     conviction = min(1.0, forecast.models_agreement_count / 5.0)
 
                     signal = TradeSignal(
@@ -94,7 +94,7 @@ def calculate_edge(market: WeatherMarket, forecast: WeatherForecast) -> List[Tra
                     Config.MAX_POSITION_USDC
                 )
 
-                if size_no >= 1.0:
+                if size_no >= Config.MIN_POSITION_USDC:
                     conviction = min(1.0, forecast.models_agreement_count / 5.0)
 
                     signal = TradeSignal(
@@ -186,10 +186,10 @@ async def save_signals_to_file(signals: List[TradeSignal]):
         with open(signals_file, 'w', encoding='utf-8') as f:
             json.dump(existing_signals, f, indent=2, ensure_ascii=False, default=str)
 
-        logger.debug(f"💾 {len(signals)} nouveaux signaux sauvegardés dans {signals_file}")
+        logger.debug(f"{len(signals)} nouveaux signaux sauvegardes dans {signals_file}")
 
     except Exception as e:
-        logger.error(f"❌ Erreur lors de la sauvegarde des signaux: {e}")
+        logger.error(f"Erreur lors de la sauvegarde des signaux: {e}")
 
 
 async def run_edge_cycle(markets=None, forecasts=None):
@@ -205,34 +205,68 @@ async def run_edge_cycle(markets=None, forecasts=None):
         # Récupération des données depuis le cache ou paramètres
         if markets is not None:
             weather_markets = markets
-            logger.debug(f"Utilisation des {len(markets)} marchés passés en paramètre")
+            logger.debug(f"Utilisation des {len(markets)} marches passes en parametre")
         else:
             weather_markets = await cache.get('weather_markets', [])
-            logger.debug(f"Récupération marchés depuis cache: {len(weather_markets)}")
+            logger.debug(f"Recuperation marches depuis cache: {len(weather_markets)}")
 
         if forecasts is not None:
             forecasts_dict = forecasts
-            logger.debug(f"Utilisation des {len(forecasts)} prévisions passées en paramètre")
+            logger.debug(f"Utilisation des {len(forecasts)} previsions passees en parametre")
         else:
             forecasts_dict = await cache.get('forecasts', {})
-            logger.debug(f"Récupération prévisions depuis cache: {len(forecasts_dict)}")
+            logger.debug(f"Recuperation previsions depuis cache: {len(forecasts_dict)}")
+
+        # ====================== DEBUG LOGS ======================
+        logger.info(f"DEBUG EDGE: {len(weather_markets)} markets, {len(forecasts_dict)} forecasts")
+        if weather_markets and forecasts_dict:
+            sample_market_id = weather_markets[0].condition_id
+            sample_forecast_key = list(forecasts_dict.keys())[0]
+            logger.info(f"DEBUG EDGE: market[0].condition_id = {str(sample_market_id)[:40]}")
+            logger.info(f"DEBUG EDGE: forecasts.keys()[0]     = {str(sample_forecast_key)[:40]}")
+            matched = sum(1 for m in weather_markets if m.condition_id in forecasts_dict)
+            logger.info(f"DEBUG EDGE: {matched}/{len(weather_markets)} markets ont un forecast matchant")
+            if matched > 0:
+                # Afficher un exemple de forecast pour voir sa structure
+                first_match = next(m for m in weather_markets if m.condition_id in forecasts_dict)
+                fc = forecasts_dict[first_match.condition_id]
+                logger.info(f"DEBUG EDGE: exemple forecast type={type(fc).__name__}")
+                if hasattr(fc, 'probabilities_by_range'):
+                    logger.info(f"DEBUG EDGE: probabilities_by_range = {fc.probabilities_by_range}")
+                if hasattr(fc, 'models_agreement_count'):
+                    logger.info(f"DEBUG EDGE: models_agreement_count = {fc.models_agreement_count}")
+                logger.info(f"DEBUG EDGE: market.liquidity_usdc = {first_match.liquidity_usdc}")
+                logger.info(f"DEBUG EDGE: market.ranges count = {len(first_match.ranges)}")
+                if first_match.ranges:
+                    r = first_match.ranges[0]
+                    logger.info(f"DEBUG EDGE: range[0].label = {r.label} | current_price = {r.current_price}")
+        else:
+            logger.warning(f"DEBUG EDGE: Pas de markets OU pas de forecasts (markets={len(weather_markets)}, forecasts={len(forecasts_dict)})")
+        # ========================================================
 
         if not weather_markets:
-            logger.debug("Aucun marché météo disponible")
+            logger.info("Aucun marche meteo disponible")
             return
 
         if not forecasts_dict:
-            logger.debug("Aucune prédiction météo disponible")
+            logger.info("Aucune prediction meteo disponible")
             return
 
         # Calcul des signaux pour chaque marché ayant une prédiction
         all_signals = []
+        markets_analyzed = 0
+        markets_skipped_liquidity = 0
 
         for market in weather_markets:
             if market.condition_id in forecasts_dict:
                 forecast = forecasts_dict[market.condition_id]
+                if market.liquidity_usdc < MIN_LIQUIDITY:
+                    markets_skipped_liquidity += 1
+                markets_analyzed += 1
                 market_signals = calculate_edge(market, forecast)
                 all_signals.extend(market_signals)
+
+        logger.info(f"DEBUG EDGE: {markets_analyzed} markets analyses, {markets_skipped_liquidity} skip liquidite, {len(all_signals)} signaux bruts avant dedup")
 
         # Déduplication des signaux
         unique_signals = deduplicate_signals(all_signals)
@@ -245,7 +279,7 @@ async def run_edge_cycle(markets=None, forecasts=None):
             await save_signals_to_file(unique_signals)
 
         # Logging des résultats
-        logger.info(f"Edge Calculator: {len(unique_signals)} opportunités détectées")
+        logger.info(f"Edge Calculator: {len(unique_signals)} opportunites detectees")
 
         for signal in unique_signals:
             logger.info(
@@ -263,7 +297,7 @@ async def run_edge_loop():
     """
     Boucle principale de l'Edge Calculator.
     """
-    logger.info("Edge Calculator démarré")
+    logger.info("Edge Calculator demarre")
 
     while True:
         try:
