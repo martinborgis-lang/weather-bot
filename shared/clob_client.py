@@ -186,6 +186,26 @@ class CLOBClient:
             logger.warning(f"Could not fetch tick_size for {token_id[:10]}...: {e}")
             return 0.01  # Conservative fallback
 
+    def _normalize_tick_size(self, ts: float) -> str:
+        """Convertit un float tick_size vers le string Literal attendu par le SDK."""
+        # Mapping float → Literal string attendu par le SDK py-clob-client
+        TICK_SIZE_MAP = {
+            0.1: "0.1",
+            0.01: "0.01",
+            0.001: "0.001",
+            0.0001: "0.0001",
+        }
+
+        # Arrondir à 4 décimales pour éviter problèmes float
+        ts_rounded = round(ts, 4)
+        if ts_rounded in TICK_SIZE_MAP:
+            return TICK_SIZE_MAP[ts_rounded]
+
+        # Fallback: trouver le plus proche
+        closest = min(TICK_SIZE_MAP.keys(), key=lambda k: abs(k - ts_rounded))
+        logger.warning(f"tick_size {ts} non standard, fallback sur {TICK_SIZE_MAP[closest]}")
+        return TICK_SIZE_MAP[closest]
+
     def post_market_order(self, token_id: str, size_usdc: float, side: str = "BUY") -> Optional[Dict]:
         """
         Poste un ordre market pour acheter des tokens YES/NO.
@@ -226,13 +246,14 @@ class CLOBClient:
 
             # Détecter neg-risk et récupérer tick_size (important pour signature EIP-712)
             neg_risk = self._is_neg_risk_market(token_id)
-            tick_size = self._get_tick_size(token_id)
-            logger.info(f"📊 Market neg-risk: {neg_risk} | tick_size: {tick_size}")
+            tick_size_float = self._get_tick_size(token_id)
+            tick_size_str = self._normalize_tick_size(tick_size_float)
+            logger.info(f"📊 Market neg-risk: {neg_risk} | tick_size: {tick_size_str}")
 
             # ARRONDIR le prix au tick_size pour cohérence avec signature EIP-712
             # Par ex: prix 0.4723 avec tick 0.01 → 0.47 ; avec tick 0.001 → 0.472
             price_decimal = Decimal(str(price))
-            tick_decimal = Decimal(str(tick_size))
+            tick_decimal = Decimal(str(tick_size_float))  # Utiliser la valeur float pour le calcul
             price_rounded = float((price_decimal / tick_decimal).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * tick_decimal)
 
             # Recalculer size tokens avec le prix arrondi
@@ -257,7 +278,7 @@ class CLOBClient:
             # IMPORTANT : passer LES DEUX options (neg_risk ET tick_size) pour signature correcte
             options = PartialCreateOrderOptions(
                 neg_risk=neg_risk,
-                tick_size=tick_size,
+                tick_size=tick_size_str,  # STRING Literal, attendu par le SDK
             )
             signed_order = self.client.create_order(order_args, options=options)
 
@@ -277,7 +298,7 @@ class CLOBClient:
                 result['executed_quantity'] = size_tokens  # Quantité recalculée
                 result['token_id'] = token_id
                 result['neg_risk'] = neg_risk
-                result['tick_size'] = tick_size
+                result['tick_size'] = tick_size_str
 
                 return result
             else:
