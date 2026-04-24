@@ -46,7 +46,7 @@ class CLOBClient:
                 host=Config.CLOB_HOST,
                 key=Config.CLOB_PRIVATE_KEY,
                 chain_id=int(Config.CLOB_CHAIN_ID),
-                signature_type=2  # EOA signature (standard wallet)
+                signature_type=0  # EOA signature (standard wallet)
             )
 
             # Charger les credentials API depuis .env
