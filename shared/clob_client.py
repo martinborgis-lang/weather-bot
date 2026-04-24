@@ -261,18 +261,22 @@ class CLOBClient:
             size_tokens_decimal = Decimal(str(size_tokens)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
             size_tokens = float(size_tokens_decimal)
 
-            logger.info(f"📊 CLOB ORDER: BUY {size_tokens:.4f} tokens @ ${price_rounded:.4f} = ${size_usdc:.2f}")
+            # Arrondir amount USDC à 2 décimales (limite maker amount)
+            amount_usdc_rounded = round(size_usdc, 2)
 
-            # Créer l'ordre avec le bon SDK pattern (2 étapes)
-            from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
+            logger.info(f"📊 Market neg-risk: {neg_risk} | tick_size: {tick_size_str}")
+            logger.info(f"📊 CLOB MARKET ORDER: BUY ${amount_usdc_rounded} USDC @ ~${price_rounded}")
+
+            # Créer l'ordre avec le bon SDK pattern (MarketOrderArgs pour market orders)
+            from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType, PartialCreateOrderOptions
             from py_clob_client.order_builder.constants import BUY
 
-            # Étape 1: Créer et signer l'ordre localement avec prix arrondi
-            order_args = OrderArgs(
-                price=price_rounded,
-                size=size_tokens,
-                side=BUY,
+            # MarketOrderArgs (pas OrderArgs !) pour un vrai market order
+            market_order_args = MarketOrderArgs(
                 token_id=token_id,
+                amount=amount_usdc_rounded,  # USDC à dépenser, 2 décimales max
+                side=BUY,
+                price=price_rounded,          # prix indicatif arrondi au tick_size
             )
 
             # IMPORTANT : passer LES DEUX options (neg_risk ET tick_size) pour signature correcte
@@ -280,7 +284,9 @@ class CLOBClient:
                 neg_risk=neg_risk,
                 tick_size=tick_size_str,  # STRING Literal, attendu par le SDK
             )
-            signed_order = self.client.create_order(order_args, options=options)
+
+            # create_market_order (pas create_order !)
+            signed_order = self.client.create_market_order(market_order_args, options=options)
 
             # Étape 2: Poster l'ordre signé (FOK = Fill-Or-Kill market order)
             start_time = time.time()
@@ -294,11 +300,13 @@ class CLOBClient:
                 result['executed_at'] = time.time()
                 result['execution_time_seconds'] = execution_time
                 result['requested_size_usdc'] = size_usdc
+                result['executed_amount_usdc'] = amount_usdc_rounded  # Montant USDC arrondi
                 result['executed_price'] = price_rounded  # Prix arrondi au tick_size
-                result['executed_quantity'] = size_tokens  # Quantité recalculée
+                result['estimated_quantity'] = size_tokens  # Quantité estimée (market order)
                 result['token_id'] = token_id
                 result['neg_risk'] = neg_risk
                 result['tick_size'] = tick_size_str
+                result['order_type'] = 'MARKET'  # Indiquer que c'est un market order
 
                 return result
             else:
