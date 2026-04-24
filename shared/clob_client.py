@@ -14,7 +14,7 @@ import time
 import aiohttp
 import json
 from typing import Dict, Optional
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
 from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
@@ -231,7 +231,6 @@ class CLOBClient:
 
             # ARRONDIR le prix au tick_size pour cohérence avec signature EIP-712
             # Par ex: prix 0.4723 avec tick 0.01 → 0.47 ; avec tick 0.001 → 0.472
-            from decimal import Decimal, ROUND_HALF_UP
             price_decimal = Decimal(str(price))
             tick_decimal = Decimal(str(tick_size))
             price_rounded = float((price_decimal / tick_decimal).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * tick_decimal)
