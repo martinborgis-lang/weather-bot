@@ -168,6 +168,24 @@ class CLOBClient:
             logger.info("Fallback: assuming neg-risk=True for safety")
             return True
 
+    def _get_tick_size(self, token_id: str) -> float:
+        """Récupère le minimum_tick_size du marché via API Polymarket."""
+        try:
+            import requests
+            url = f"https://clob.polymarket.com/tick-size?token_id={token_id}"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                tick_size = float(data.get("minimum_tick_size", 0.01))
+                logger.debug(f"API returned tick_size={tick_size} for {token_id[:10]}...")
+                return tick_size
+            else:
+                logger.debug(f"Tick-size API returned {response.status_code} for {token_id[:10]}...")
+                return 0.01  # Default fallback
+        except Exception as e:
+            logger.warning(f"Could not fetch tick_size for {token_id[:10]}...: {e}")
+            return 0.01  # Conservative fallback
+
     def post_market_order(self, token_id: str, size_usdc: float, side: str = "BUY") -> Optional[Dict]:
         """
         Poste un ordre market pour acheter des tokens YES/NO.
@@ -206,25 +224,42 @@ class CLOBClient:
             quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
             quantity = float(quantity_decimal)
 
-            # Détecter si marché neg-risk (important pour signature EIP-712)
+            # Détecter neg-risk et récupérer tick_size (important pour signature EIP-712)
             neg_risk = self._is_neg_risk_market(token_id)
-            logger.info(f"📊 CLOB ORDER: {side} {quantity:.4f} tokens @ ${price:.4f} = ${size_usdc:.2f}")
-            logger.info(f"📊 Market neg-risk: {neg_risk}")
+            tick_size = self._get_tick_size(token_id)
+            logger.info(f"📊 Market neg-risk: {neg_risk} | tick_size: {tick_size}")
+
+            # ARRONDIR le prix au tick_size pour cohérence avec signature EIP-712
+            # Par ex: prix 0.4723 avec tick 0.01 → 0.47 ; avec tick 0.001 → 0.472
+            from decimal import Decimal, ROUND_HALF_UP
+            price_decimal = Decimal(str(price))
+            tick_decimal = Decimal(str(tick_size))
+            price_rounded = float((price_decimal / tick_decimal).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * tick_decimal)
+
+            # Recalculer size tokens avec le prix arrondi
+            size_tokens = size_usdc / price_rounded
+            size_tokens_decimal = Decimal(str(size_tokens)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
+            size_tokens = float(size_tokens_decimal)
+
+            logger.info(f"📊 CLOB ORDER: BUY {size_tokens:.4f} tokens @ ${price_rounded:.4f} = ${size_usdc:.2f}")
 
             # Créer l'ordre avec le bon SDK pattern (2 étapes)
             from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
             from py_clob_client.order_builder.constants import BUY
 
-            # Étape 1: Créer et signer l'ordre localement
+            # Étape 1: Créer et signer l'ordre localement avec prix arrondi
             order_args = OrderArgs(
-                price=price,
-                size=quantity,
+                price=price_rounded,
+                size=size_tokens,
                 side=BUY,
                 token_id=token_id,
             )
 
-            # IMPORTANT : passer les options avec neg_risk pour signer avec le bon domaine
-            options = PartialCreateOrderOptions(neg_risk=neg_risk)
+            # IMPORTANT : passer LES DEUX options (neg_risk ET tick_size) pour signature correcte
+            options = PartialCreateOrderOptions(
+                neg_risk=neg_risk,
+                tick_size=tick_size,
+            )
             signed_order = self.client.create_order(order_args, options=options)
 
             # Étape 2: Poster l'ordre signé (FOK = Fill-Or-Kill market order)
@@ -239,9 +274,11 @@ class CLOBClient:
                 result['executed_at'] = time.time()
                 result['execution_time_seconds'] = execution_time
                 result['requested_size_usdc'] = size_usdc
-                result['executed_price'] = price
-                result['executed_quantity'] = quantity
+                result['executed_price'] = price_rounded  # Prix arrondi au tick_size
+                result['executed_quantity'] = size_tokens  # Quantité recalculée
                 result['token_id'] = token_id
+                result['neg_risk'] = neg_risk
+                result['tick_size'] = tick_size
 
                 return result
             else:
