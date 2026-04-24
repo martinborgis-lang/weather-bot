@@ -18,11 +18,8 @@ import io
 
 # Force UTF-8 sur Windows pour éviter les UnicodeEncodeError cp1252
 if sys.platform == "win32":
-    # sys.stdout non wrappé pour scripts interactifs : conflit avec argparse
-    # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-    # sys.stderr non wrappé : conflit avec argparse / logging stderr handlers
-    # Les émojis dans stderr peuvent être moches mais le script fonctionne
-    pass
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 import argparse
 import os
@@ -41,9 +38,18 @@ logger = logging.getLogger(__name__)
 CONTRACTS = {
     'USDC': '0x2791bca1f2de4661ed88a30c99a7a9449aa84174',      # USDC.e
     'CTF': '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045',        # ConditionalTokens
-    'EXCHANGE': '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E',    # Polymarket Exchange
+    'CTF_EXCHANGE': '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E',    # CTF Exchange (standard)
+    'NEG_RISK_EXCHANGE': '0xC5d563A36AE78145C45a50134d48A1215220f80a',  # Neg Risk Exchange
+    'NEG_RISK_ADAPTER': '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296',   # Neg Risk Adapter
     'COLLATERAL_TOKEN': '0x2791bca1f2de4661ed88a30c99a7a9449aa84174',  # USDC.e
 }
+
+# Liste des contracts qui ont besoin d'approvals
+APPROVAL_TARGETS = [
+    ('CTF Exchange', 'CTF_EXCHANGE'),
+    ('Neg Risk Exchange', 'NEG_RISK_EXCHANGE'),
+    ('Neg Risk Adapter', 'NEG_RISK_ADAPTER')
+]
 
 # ABIs minimaux pour les approvals
 ERC20_ABI = [
@@ -188,173 +194,232 @@ class ApprovalsManager:
             return None
 
     def check_usdc_allowance(self):
-        """Vérifie l'allowance USDC vers l'Exchange"""
+        """Vérifie l'allowance USDC vers tous les contracts Polymarket"""
         try:
-            allowance = self.usdc_contract.functions.allowance(
-                self.account.address,
-                CONTRACTS['EXCHANGE']
-            ).call()
-
             decimals = self.usdc_contract.functions.decimals().call()
-            allowance_usdc = allowance / (10 ** decimals)
+            results = {}
 
-            return {
-                'allowance_raw': allowance,
-                'allowance_usdc': allowance_usdc,
-                'is_max': allowance >= MAX_APPROVAL // 2,  # Proche du max
-                'exchange_address': CONTRACTS['EXCHANGE']
-            }
+            for name, contract_key in APPROVAL_TARGETS:
+                spender_address = Web3.to_checksum_address(CONTRACTS[contract_key])
+                allowance = self.usdc_contract.functions.allowance(
+                    self.account.address,
+                    spender_address
+                ).call()
+
+                allowance_usdc = allowance / (10 ** decimals)
+                is_max = allowance >= MAX_APPROVAL // 2  # Proche du max
+
+                results[name] = {
+                    'allowance_raw': allowance,
+                    'allowance_usdc': allowance_usdc,
+                    'is_max': is_max,
+                    'spender_address': spender_address
+                }
+
+            return results
 
         except Exception as e:
             logger.error(f"❌ Erreur vérification allowance USDC: {e}")
             return None
 
     def check_ctf_approval(self):
-        """Vérifie l'approval CTF vers l'Exchange"""
+        """Vérifie l'approval CTF vers tous les contracts Polymarket"""
         try:
-            is_approved = self.ctf_contract.functions.isApprovedForAll(
-                self.account.address,
-                CONTRACTS['EXCHANGE']
-            ).call()
+            results = {}
 
-            return {
-                'is_approved': is_approved,
-                'operator_address': CONTRACTS['EXCHANGE']
-            }
+            for name, contract_key in APPROVAL_TARGETS:
+                operator_address = Web3.to_checksum_address(CONTRACTS[contract_key])
+                is_approved = self.ctf_contract.functions.isApprovedForAll(
+                    self.account.address,
+                    operator_address
+                ).call()
+
+                results[name] = {
+                    'is_approved': is_approved,
+                    'operator_address': operator_address
+                }
+
+            return results
 
         except Exception as e:
             logger.error(f"❌ Erreur vérification approval CTF: {e}")
             return None
 
-    def approve_usdc(self, dry_run=True):
-        """Approve USDC vers l'Exchange Polymarket"""
+    def approve_usdc(self, targets_to_approve=None, dry_run=True):
+        """Approve USDC vers les contracts Polymarket spécifiés"""
         try:
-            logger.info("📝 Préparation approval USDC...")
+            # Si aucun target spécifié, approuver tous ceux qui ne le sont pas encore
+            if targets_to_approve is None:
+                usdc_status = self.check_usdc_allowance()
+                if not usdc_status:
+                    return None
+                targets_to_approve = [name for name, status in usdc_status.items() if not status['is_max']]
 
-            # Construire la transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            if not targets_to_approve:
+                logger.info("✅ Tous les contracts USDC sont déjà approuvés")
+                return {'success': True, 'skipped': True}
 
-            transaction = self.usdc_contract.functions.approve(
-                CONTRACTS['EXCHANGE'],
-                MAX_APPROVAL
-            ).build_transaction({
-                'from': self.account.address,
-                'nonce': nonce,
-                'gasPrice': self.w3.eth.gas_price,
-            })
+            logger.info(f"📝 Préparation approval USDC pour: {', '.join(targets_to_approve)}")
+            results = {}
 
-            # Estimation gas
-            gas_estimate = self.w3.eth.estimate_gas(transaction)
-            transaction['gas'] = int(gas_estimate * 1.2)  # 20% buffer
+            for target_name in targets_to_approve:
+                # Trouver la clé du contract
+                contract_key = next((key for name, key in APPROVAL_TARGETS if name == target_name), None)
+                if not contract_key:
+                    logger.error(f"❌ Contract inconnu: {target_name}")
+                    continue
 
-            gas_cost_wei = transaction['gas'] * transaction['gasPrice']
-            gas_cost_matic = self.w3.from_wei(gas_cost_wei, 'ether')
+                spender_address = Web3.to_checksum_address(CONTRACTS[contract_key])
 
-            logger.info(f"Gas estimé: {transaction['gas']} | Coût: {gas_cost_matic:.4f} MATIC")
+                # Construire la transaction
+                nonce = self.w3.eth.get_transaction_count(self.account.address)
 
-            if dry_run:
-                logger.info("🔸 DRY RUN: Transaction non envoyée")
-                return {
-                    'dry_run': True,
-                    'gas_estimate': transaction['gas'],
-                    'gas_cost_matic': float(gas_cost_matic),
-                    'transaction_data': transaction
-                }
+                transaction = self.usdc_contract.functions.approve(
+                    spender_address,
+                    MAX_APPROVAL
+                ).build_transaction({
+                    'from': self.account.address,
+                    'nonce': nonce,
+                    'gasPrice': self.w3.eth.gas_price,
+                })
 
-            # Confirmation utilisateur
-            confirm = input(f"\n💰 Envoyer approval USDC? Coût: {gas_cost_matic:.4f} MATIC (y/N): ").strip().lower()
-            if confirm != 'y':
-                logger.info("⏹️ Approval annulée par l'utilisateur")
-                return None
+                # Estimation gas
+                gas_estimate = self.w3.eth.estimate_gas(transaction)
+                transaction['gas'] = int(gas_estimate * 1.2)  # 20% buffer
 
-            # Signer et envoyer
-            signed_txn = self.w3.eth.account.sign_transaction(transaction, self.private_key)
-            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                gas_cost_wei = transaction['gas'] * transaction['gasPrice']
+                gas_cost_matic = self.w3.from_wei(gas_cost_wei, 'ether')
 
-            logger.info(f"📤 Transaction envoyée: {tx_hash.hex()}")
-            logger.info("⏳ Attente confirmation...")
+                logger.info(f"Gas estimé pour {target_name}: {transaction['gas']} | Coût: {gas_cost_matic:.4f} MATIC")
 
-            # Attendre la confirmation
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+                if dry_run:
+                    results[target_name] = {
+                        'dry_run': True,
+                        'gas_estimate': transaction['gas'],
+                        'gas_cost_matic': float(gas_cost_matic)
+                    }
+                    continue
 
-            if receipt.status == 1:
-                logger.info("✅ Approval USDC réussie!")
-                return {
-                    'success': True,
-                    'tx_hash': tx_hash.hex(),
-                    'gas_used': receipt.gasUsed,
-                    'block_number': receipt.blockNumber
-                }
-            else:
-                logger.error("❌ Transaction échouée")
-                return None
+                # Confirmation utilisateur
+                confirm = input(f"\n💰 Envoyer approval USDC pour {target_name}? Coût: {gas_cost_matic:.4f} MATIC (y/N): ").strip().lower()
+                if confirm != 'y':
+                    logger.info(f"⏹️ Approval {target_name} annulée par l'utilisateur")
+                    results[target_name] = {'skipped': True}
+                    continue
+
+                # Signer et envoyer
+                signed_txn = self.w3.eth.account.sign_transaction(transaction, self.private_key)
+                tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+
+                logger.info(f"📤 Transaction envoyée pour {target_name}: {tx_hash.hex()}")
+                logger.info("⏳ Attente confirmation...")
+
+                # Attendre la confirmation
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+
+                if receipt.status == 1:
+                    logger.info(f"✅ Approval USDC pour {target_name} réussie!")
+                    results[target_name] = {
+                        'success': True,
+                        'tx_hash': tx_hash.hex(),
+                        'gas_used': receipt.gasUsed,
+                        'block_number': receipt.blockNumber
+                    }
+                else:
+                    logger.error(f"❌ Transaction échouée pour {target_name}")
+                    results[target_name] = {'failed': True}
+
+            return results
 
         except Exception as e:
             logger.error(f"❌ Erreur approval USDC: {e}")
             return None
 
-    def approve_ctf(self, dry_run=True):
-        """Approve CTF vers l'Exchange Polymarket"""
+    def approve_ctf(self, targets_to_approve=None, dry_run=True):
+        """Approve CTF vers les contracts Polymarket spécifiés"""
         try:
-            logger.info("📝 Préparation approval CTF...")
+            # Si aucun target spécifié, approuver tous ceux qui ne le sont pas encore
+            if targets_to_approve is None:
+                ctf_status = self.check_ctf_approval()
+                if not ctf_status:
+                    return None
+                targets_to_approve = [name for name, status in ctf_status.items() if not status['is_approved']]
 
-            # Construire la transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            if not targets_to_approve:
+                logger.info("✅ Tous les contracts CTF sont déjà approuvés")
+                return {'success': True, 'skipped': True}
 
-            transaction = self.ctf_contract.functions.setApprovalForAll(
-                CONTRACTS['EXCHANGE'],
-                True
-            ).build_transaction({
-                'from': self.account.address,
-                'nonce': nonce,
-                'gasPrice': self.w3.eth.gas_price,
-            })
+            logger.info(f"📝 Préparation approval CTF pour: {', '.join(targets_to_approve)}")
+            results = {}
 
-            # Estimation gas
-            gas_estimate = self.w3.eth.estimate_gas(transaction)
-            transaction['gas'] = int(gas_estimate * 1.2)  # 20% buffer
+            for target_name in targets_to_approve:
+                # Trouver la clé du contract
+                contract_key = next((key for name, key in APPROVAL_TARGETS if name == target_name), None)
+                if not contract_key:
+                    logger.error(f"❌ Contract inconnu: {target_name}")
+                    continue
 
-            gas_cost_wei = transaction['gas'] * transaction['gasPrice']
-            gas_cost_matic = self.w3.from_wei(gas_cost_wei, 'ether')
+                operator_address = Web3.to_checksum_address(CONTRACTS[contract_key])
 
-            logger.info(f"Gas estimé: {transaction['gas']} | Coût: {gas_cost_matic:.4f} MATIC")
+                # Construire la transaction
+                nonce = self.w3.eth.get_transaction_count(self.account.address)
 
-            if dry_run:
-                logger.info("🔸 DRY RUN: Transaction non envoyée")
-                return {
-                    'dry_run': True,
-                    'gas_estimate': transaction['gas'],
-                    'gas_cost_matic': float(gas_cost_matic),
-                    'transaction_data': transaction
-                }
+                transaction = self.ctf_contract.functions.setApprovalForAll(
+                    operator_address,
+                    True
+                ).build_transaction({
+                    'from': self.account.address,
+                    'nonce': nonce,
+                    'gasPrice': self.w3.eth.gas_price,
+                })
 
-            # Confirmation utilisateur
-            confirm = input(f"\n💰 Envoyer approval CTF? Coût: {gas_cost_matic:.4f} MATIC (y/N): ").strip().lower()
-            if confirm != 'y':
-                logger.info("⏹️ Approval annulée par l'utilisateur")
-                return None
+                # Estimation gas
+                gas_estimate = self.w3.eth.estimate_gas(transaction)
+                transaction['gas'] = int(gas_estimate * 1.2)  # 20% buffer
 
-            # Signer et envoyer
-            signed_txn = self.w3.eth.account.sign_transaction(transaction, self.private_key)
-            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                gas_cost_wei = transaction['gas'] * transaction['gasPrice']
+                gas_cost_matic = self.w3.from_wei(gas_cost_wei, 'ether')
 
-            logger.info(f"📤 Transaction envoyée: {tx_hash.hex()}")
-            logger.info("⏳ Attente confirmation...")
+                logger.info(f"Gas estimé pour {target_name}: {transaction['gas']} | Coût: {gas_cost_matic:.4f} MATIC")
 
-            # Attendre la confirmation
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+                if dry_run:
+                    results[target_name] = {
+                        'dry_run': True,
+                        'gas_estimate': transaction['gas'],
+                        'gas_cost_matic': float(gas_cost_matic)
+                    }
+                    continue
 
-            if receipt.status == 1:
-                logger.info("✅ Approval CTF réussie!")
-                return {
-                    'success': True,
-                    'tx_hash': tx_hash.hex(),
-                    'gas_used': receipt.gasUsed,
-                    'block_number': receipt.blockNumber
-                }
-            else:
-                logger.error("❌ Transaction échouée")
-                return None
+                # Confirmation utilisateur
+                confirm = input(f"\n💰 Envoyer approval CTF pour {target_name}? Coût: {gas_cost_matic:.4f} MATIC (y/N): ").strip().lower()
+                if confirm != 'y':
+                    logger.info(f"⏹️ Approval {target_name} annulée par l'utilisateur")
+                    results[target_name] = {'skipped': True}
+                    continue
+
+                # Signer et envoyer
+                signed_txn = self.w3.eth.account.sign_transaction(transaction, self.private_key)
+                tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+
+                logger.info(f"📤 Transaction envoyée pour {target_name}: {tx_hash.hex()}")
+                logger.info("⏳ Attente confirmation...")
+
+                # Attendre la confirmation
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+
+                if receipt.status == 1:
+                    logger.info(f"✅ Approval CTF pour {target_name} réussie!")
+                    results[target_name] = {
+                        'success': True,
+                        'tx_hash': tx_hash.hex(),
+                        'gas_used': receipt.gasUsed,
+                        'block_number': receipt.blockNumber
+                    }
+                else:
+                    logger.error(f"❌ Transaction échouée pour {target_name}")
+                    results[target_name] = {'failed': True}
+
+            return results
 
         except Exception as e:
             logger.error(f"❌ Erreur approval CTF: {e}")
@@ -382,34 +447,35 @@ def check_approvals():
         usdc_allowance = manager.check_usdc_allowance()
         if usdc_allowance:
             logger.info("\n📋 USDC Allowance:")
-            logger.info(f"   Exchange: {usdc_allowance['exchange_address']}")
-            logger.info(f"   Allowance: {usdc_allowance['allowance_usdc']:.2f} USDC")
-
-            if usdc_allowance['is_max']:
-                logger.info("   ✅ Approval maximale configurée")
-            else:
-                logger.warning("   ⚠️ Approval insuffisante ou manquante")
+            for name, status in usdc_allowance.items():
+                status_icon = "✅ MAX" if status['is_max'] else "❌ NOT approved"
+                logger.info(f"   {name:<18}: {status_icon}")
+                if not status['is_max']:
+                    logger.info(f"   {'':<18}  Current: {status['allowance_usdc']:.2f} USDC")
 
         # CTF Approval
         ctf_approval = manager.check_ctf_approval()
         if ctf_approval:
             logger.info("\n📋 CTF Approval:")
-            logger.info(f"   Exchange: {ctf_approval['operator_address']}")
-
-            if ctf_approval['is_approved']:
-                logger.info("   ✅ Approval CTF configurée")
-            else:
-                logger.warning("   ⚠️ Approval CTF manquante")
+            for name, status in ctf_approval.items():
+                status_icon = "✅ Approved" if status['is_approved'] else "❌ NOT approved"
+                logger.info(f"   {name:<18}: {status_icon}")
 
         # Résumé
-        usdc_ok = usdc_allowance and usdc_allowance['is_max']
-        ctf_ok = ctf_approval and ctf_approval['is_approved']
+        usdc_ok = usdc_allowance and all(status['is_max'] for status in usdc_allowance.values())
+        ctf_ok = ctf_approval and all(status['is_approved'] for status in ctf_approval.values())
 
         logger.info("\n" + "="*50)
+        total_approvals = len(APPROVAL_TARGETS) * 2  # 3 contracts x 2 types (USDC + CTF) = 6
         if usdc_ok and ctf_ok:
-            logger.info("✅ Toutes les approvals sont configurées - bot prêt pour LIVE trading!")
+            logger.info(f"✅ All {total_approvals} approvals configured - bot prêt pour LIVE trading!")
         else:
-            logger.warning("⚠️ Approvals manquantes - lancez: python utils/setup_approvals.py --setup")
+            approved_count = 0
+            if usdc_allowance:
+                approved_count += sum(1 for status in usdc_allowance.values() if status['is_max'])
+            if ctf_approval:
+                approved_count += sum(1 for status in ctf_approval.values() if status['is_approved'])
+            logger.warning(f"⚠️ Only {approved_count}/{total_approvals} approvals configured - lancez: python utils/setup_approvals.py --setup")
 
     except Exception as e:
         logger.error(f"❌ Erreur vérification: {e}")
@@ -434,21 +500,26 @@ def setup_approvals():
         usdc_allowance = manager.check_usdc_allowance()
         ctf_approval = manager.check_ctf_approval()
 
-        setup_needed = []
+        # Identifier ce qui manque
+        usdc_needed = []
+        ctf_needed = []
 
-        # USDC Approval
-        if not (usdc_allowance and usdc_allowance['is_max']):
-            setup_needed.append('USDC')
+        if usdc_allowance:
+            usdc_needed = [name for name, status in usdc_allowance.items() if not status['is_max']]
 
-        # CTF Approval
-        if not (ctf_approval and ctf_approval['is_approved']):
-            setup_needed.append('CTF')
+        if ctf_approval:
+            ctf_needed = [name for name, status in ctf_approval.items() if not status['is_approved']]
 
-        if not setup_needed:
-            logger.info("✅ Toutes les approvals sont déjà configurées!")
+        if not usdc_needed and not ctf_needed:
+            total_approvals = len(APPROVAL_TARGETS) * 2
+            logger.info(f"✅ All {total_approvals} approvals déjà configurées!")
             return
 
-        logger.info(f"\n🔧 Approvals à configurer: {', '.join(setup_needed)}")
+        logger.info("\n🔧 Approvals à configurer:")
+        if usdc_needed:
+            logger.info(f"   USDC: {', '.join(usdc_needed)}")
+        if ctf_needed:
+            logger.info(f"   CTF:  {', '.join(ctf_needed)}")
 
         # Confirmation
         logger.warning("⚠️ ATTENTION: Ces transactions vont consommer des MATIC en gas fees")
@@ -457,24 +528,32 @@ def setup_approvals():
             logger.info("⏹️ Configuration annulée par l'utilisateur")
             return
 
-        # Configurer USDC approval
-        if 'USDC' in setup_needed:
-            logger.info("\n" + "="*30 + " USDC APPROVAL " + "="*30)
-            result = manager.approve_usdc(dry_run=False)
-            if result and result.get('success'):
-                logger.info(f"✅ USDC approval réussie: {result['tx_hash']}")
+        # Configurer USDC approvals
+        if usdc_needed:
+            logger.info("\n" + "="*30 + " USDC APPROVALS " + "="*30)
+            result = manager.approve_usdc(targets_to_approve=usdc_needed, dry_run=False)
+            if result:
+                success_count = sum(1 for r in result.values() if r.get('success'))
+                if success_count > 0:
+                    logger.info(f"✅ {success_count}/{len(usdc_needed)} USDC approvals réussies")
+                if success_count < len(usdc_needed):
+                    logger.error("❌ Certaines USDC approvals ont échoué")
             else:
-                logger.error("❌ Échec USDC approval")
+                logger.error("❌ Échec USDC approvals")
                 return
 
-        # Configurer CTF approval
-        if 'CTF' in setup_needed:
-            logger.info("\n" + "="*30 + " CTF APPROVAL " + "="*30)
-            result = manager.approve_ctf(dry_run=False)
-            if result and result.get('success'):
-                logger.info(f"✅ CTF approval réussie: {result['tx_hash']}")
+        # Configurer CTF approvals
+        if ctf_needed:
+            logger.info("\n" + "="*30 + " CTF APPROVALS " + "="*30)
+            result = manager.approve_ctf(targets_to_approve=ctf_needed, dry_run=False)
+            if result:
+                success_count = sum(1 for r in result.values() if r.get('success'))
+                if success_count > 0:
+                    logger.info(f"✅ {success_count}/{len(ctf_needed)} CTF approvals réussies")
+                if success_count < len(ctf_needed):
+                    logger.error("❌ Certaines CTF approvals ont échoué")
             else:
-                logger.error("❌ Échec CTF approval")
+                logger.error("❌ Échec CTF approvals")
                 return
 
         logger.info("\n" + "="*50)
