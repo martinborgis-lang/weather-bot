@@ -134,6 +134,40 @@ class CLOBClient:
             logger.error(f"Erreur get_best_prices pour {token_id[:10]}...: {e}")
             return None
 
+    def _is_neg_risk_market(self, token_id: str) -> bool:
+        """
+        Check if a market is neg-risk via multiple methods.
+
+        Daily-temperature weather markets are typically neg-risk type.
+        Fallback: assume True for weather markets if API detection fails.
+        """
+        try:
+            import requests
+
+            # Method 1: Try the direct neg-risk API endpoint
+            url = f"https://clob.polymarket.com/neg-risk?token_id={token_id}"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                is_neg_risk = bool(data.get("neg_risk", False))
+                logger.debug(f"API confirmed neg-risk={is_neg_risk} for {token_id[:10]}...")
+                return is_neg_risk
+
+            # Method 2: Try via order book or market data API
+            # (This could be extended if we find other endpoints)
+
+            # Method 3: Fallback assumption for weather markets
+            # Since user stated all daily-temperature markets are neg-risk
+            logger.info(f"Could not confirm via API, assuming neg-risk=True for weather market {token_id[:10]}...")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Neg-risk detection failed for {token_id[:10]}...: {e}")
+            # Conservative fallback: assume neg-risk=True for weather markets
+            # Better to sign with wrong domain and get rejected than miss the trade
+            logger.info("Fallback: assuming neg-risk=True for safety")
+            return True
+
     def post_market_order(self, token_id: str, size_usdc: float, side: str = "BUY") -> Optional[Dict]:
         """
         Poste un ordre market pour acheter des tokens YES/NO.
@@ -172,10 +206,13 @@ class CLOBClient:
             quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
             quantity = float(quantity_decimal)
 
+            # Détecter si marché neg-risk (important pour signature EIP-712)
+            neg_risk = self._is_neg_risk_market(token_id)
             logger.info(f"📊 CLOB ORDER: {side} {quantity:.4f} tokens @ ${price:.4f} = ${size_usdc:.2f}")
+            logger.info(f"📊 Market neg-risk: {neg_risk}")
 
             # Créer l'ordre avec le bon SDK pattern (2 étapes)
-            from py_clob_client.clob_types import OrderArgs, OrderType
+            from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
             from py_clob_client.order_builder.constants import BUY
 
             # Étape 1: Créer et signer l'ordre localement
@@ -185,7 +222,10 @@ class CLOBClient:
                 side=BUY,
                 token_id=token_id,
             )
-            signed_order = self.client.create_order(order_args)
+
+            # IMPORTANT : passer les options avec neg_risk pour signer avec le bon domaine
+            options = PartialCreateOrderOptions(neg_risk=neg_risk)
+            signed_order = self.client.create_order(order_args, options=options)
 
             # Étape 2: Poster l'ordre signé (FOK = Fill-Or-Kill market order)
             start_time = time.time()
