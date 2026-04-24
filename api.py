@@ -1,3 +1,12 @@
+import sys
+import io
+
+# Force UTF-8 sur Windows pour éviter les UnicodeEncodeError cp1252
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+    # sys.stderr non wrappé : conflit avec argparse / logging stderr handlers
+    # Les émojis dans stderr peuvent être moches mais le script fonctionne
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware

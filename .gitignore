@@ -1,15 +1,31 @@
 ﻿.env
+.env.local
 __pycache__/
 *.pyc
-data/positions.json
-data/signals.json
-data/trade_history.json
 *.log
 venv/
 .vscode/
-positions.json
 node_modules/
 .next/
 dist/
 build/
-.env.local
+
+# Runtime data
+data/positions.json
+data/signals.json
+data/trade_history.json
+data/forecast_log.json
+data/bot_status.json
+data/sniper_detections.csv
+data/.kill_switch
+positions.json
+
+# Test results
+test_results_*.json
+
+# Old versions / debug scripts
+*_ancien.py
+debug_*.py
+
+# Logs
+logs/

@@ -24,8 +24,16 @@ class Config:
     # Data
     DATA_DIR = os.getenv('DATA_DIR', './data')
 
-    # CLOB API
+    # CLOB API (Polymarket)
     CLOB_PRIVATE_KEY = os.getenv('CLOB_PRIVATE_KEY')
+    CLOB_HOST = os.getenv('CLOB_HOST', 'https://clob.polymarket.com')
+    CLOB_CHAIN_ID = os.getenv('CLOB_CHAIN_ID', '137')  # Polygon mainnet
+    WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
+
+    # API RPC
+    POLYGON_RPC_URL = os.getenv('POLYGON_RPC_URL')
+
+    # Legacy CLOB configs (deprecated)
     CLOB_API_KEY = os.getenv('CLOB_API_KEY')
     CLOB_SECRET = os.getenv('CLOB_SECRET')
     CLOB_PASSPHRASE = os.getenv('CLOB_PASSPHRASE')

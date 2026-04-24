@@ -1,3 +1,14 @@
+import sys
+import io
+
+# Force UTF-8 sur Windows pour éviter les UnicodeEncodeError cp1252
+if sys.platform == "win32":
+    # sys.stdout non wrappé pour modules importés : conflit lors de l'import
+    # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+    # sys.stderr non wrappé : conflit avec argparse / logging stderr handlers
+    # Les émojis dans stderr peuvent être moches mais le script fonctionne
+    pass
+
 import asyncio
 import json
 import logging
@@ -7,6 +18,7 @@ from datetime import datetime
 from typing import List
 from shared.models import TradeSignal, OpenPosition
 from shared.cache import cache
+from shared.clob_client import get_clob_client
 from config import Config
 
 # Constantes
@@ -34,7 +46,7 @@ class MockClobClient:
         self.secret = secret
         self.passphrase = passphrase
         self.private_key = private_key
-        self.dry_run = os.environ.get('DRY_RUN', 'true').lower() == 'true'
+        self.dry_run = Config.DRY_RUN
 
         logger.info(f"ClobClient initialisé - DRY_RUN: {self.dry_run}")
 
@@ -58,7 +70,48 @@ class MockClobClient:
             #     side=side,
             #     order_type=order_type
             # )
-            raise NotImplementedError("Vraie implémentation CLOB API à implémenter")
+            # Vraie implémentation CLOB API avec py-clob-client
+            try:
+                from py_clob_client.client import ClobClient
+
+                # Utiliser le client réel avec les configs du .env
+                clob_client = ClobClient(
+                    host=Config.CLOB_HOST,
+                    key=Config.CLOB_PRIVATE_KEY,
+                    chain_id=int(Config.CLOB_CHAIN_ID),
+                    signature_type=2  # EOA signature
+                )
+
+                # Convertir la taille en tokens pour l'ordre
+                size_tokens = size
+
+                # Créer l'ordre market BUY
+                order_args = {
+                    'token_id': token_id,
+                    'price': price,
+                    'size': size_tokens,
+                    'side': 'BUY',
+                    'type': 'FOK',  # Fill-or-Kill
+                    'feeRateBps': 0
+                }
+
+                logger.info(f"📤 LIVE ORDER: BUY {size_tokens:.4f} tokens @ ${price:.4f}")
+                result = clob_client.post_order(**order_args)
+
+                if result and result.get('success', False):
+                    return {
+                        "success": True,
+                        "orderId": result.get('orderID', 'unknown'),
+                        "hash": result.get('hash', None)
+                    }
+                else:
+                    error_msg = result.get('error', 'Ordre rejeté') if result else 'Pas de réponse'
+                    logger.error(f"❌ CLOB order failed: {error_msg}")
+                    return {"success": False, "error": error_msg}
+
+            except Exception as e:
+                logger.error(f"❌ Erreur CLOB API: {e}")
+                return {"success": False, "error": str(e)}
 
 class TradeExecutor:
     """Exécute les signaux de trade via la CLOB API Polymarket"""
@@ -74,7 +127,7 @@ class TradeExecutor:
         self.private_key = os.environ.get('CLOB_PRIVATE_KEY')
 
         # Configuration DRY_RUN
-        self.dry_run = os.environ.get('DRY_RUN', 'true').lower() == 'true'
+        self.dry_run = Config.DRY_RUN
 
         logger.info(f"TradeExecutor initialisé - DRY_RUN: {self.dry_run}")
 
@@ -143,6 +196,58 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"❌ Erreur lors de la sauvegarde de l'historique: {e}")
 
+    async def _save_position_to_file(self, position: OpenPosition):
+        """Sauvegarde une position dans positions.json pour le dashboard"""
+        try:
+            positions_file = os.path.join(self.data_dir, "positions.json")
+
+            # Charger les positions existantes
+            existing_positions = []
+            if os.path.exists(positions_file):
+                try:
+                    with open(positions_file, 'r', encoding='utf-8') as f:
+                        existing_positions = json.load(f)
+                except:
+                    existing_positions = []
+
+            # Extraire la ville du titre du marché
+            city = "Unknown"
+            if hasattr(position, 'market_title') and position.market_title:
+                city_match = re.search(r'in\s+([A-Z][a-z]+)', position.market_title)
+                if city_match:
+                    city = city_match.group(1)
+
+            # Créer l'entrée de position
+            position_entry = {
+                'market_condition_id': position.market_condition_id,
+                'market_title': position.market_title,
+                'temperature_label': position.temperature_label,
+                'side': position.side,
+                'entry_price': position.entry_price,
+                'current_price': position.current_price,
+                'size_usdc': position.size_usdc,
+                'size_tokens': position.size_tokens,
+                'unrealized_pnl': position.unrealized_pnl,
+                'unrealized_pnl_pct': position.unrealized_pnl_pct,
+                'opened_at': position.opened_at.isoformat(),
+                'transaction_hash': position.transaction_hash,
+                'dry_run': position.dry_run,
+                'city': city,
+                'resolution_datetime': position.resolution_datetime.isoformat() if position.resolution_datetime else None
+            }
+
+            existing_positions.append(position_entry)
+
+            # Sauvegarder
+            with open(positions_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_positions, f, indent=2, ensure_ascii=False, default=str)
+
+            dry_run_label = "[DRY RUN] " if position.dry_run else ""
+            logger.debug(f"💾 {dry_run_label}Position sauvegardée: {city} {position.side} {position.size_usdc:.0f} USDC")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la sauvegarde de position: {e}")
+
     async def _initialize_clob_client(self):
         """Initialise le client CLOB avec les credentials"""
         if not all([self.api_key, self.secret, self.passphrase, self.private_key]):
@@ -151,12 +256,15 @@ class TradeExecutor:
             else:
                 logger.warning("Credentials CLOB manquants - mode DRY_RUN uniquement")
 
-        self.clob_client = MockClobClient(
-            api_key=self.api_key,
-            secret=self.secret,
-            passphrase=self.passphrase,
-            private_key=self.private_key
-        )
+        # Initialiser le vrai CLOB client
+        self.clob_client = get_clob_client() if not self.dry_run else None
+
+        if self.clob_client:
+            logger.info("✅ CLOB client LIVE initialisé")
+        elif not self.dry_run:
+            raise ValueError("Impossible d'initialiser CLOB client en mode LIVE")
+        else:
+            logger.info("🔸 Mode DRY_RUN: pas de CLOB client")
 
     async def _check_existing_position(self, signal: TradeSignal) -> bool:
         """Vérifie si une position est déjà ouverte sur le même marché/range"""
@@ -258,20 +366,31 @@ class TradeExecutor:
                            f"({signal.recommended_size_usdc:.2f} USDC) sur {signal.market.title} - "
                            f"{signal.temperature_range.label}")
 
-                order_result = self.clob_client.create_and_post_order(
+                if not self.clob_client:
+                    logger.error("❌ CLOB client non initialisé pour mode LIVE")
+                    return False
+
+                # Utiliser le wrapper CLOB client
+                order_result = self.clob_client.post_market_order(
                     token_id=signal.temperature_range.token_id,
-                    price=signal.temperature_range.current_price,
-                    size=size_tokens,
-                    side='BUY',  # Toujours BUY car on trade les tokens YES
-                    order_type='FOK'
+                    size_usdc=signal.recommended_size_usdc,
+                    side='BUY'
                 )
 
-                if not order_result.get("success"):
-                    logger.error(f"Échec de l'ordre CLOB: {order_result}")
+                if not order_result:
+                    logger.error("❌ Échec de l'ordre CLOB")
                     return False
 
                 transaction_hash = order_result.get("hash")
-                logger.info(f"Trade exécuté: tx_hash={transaction_hash}, order_id={order_result.get('orderId')}")
+                order_id = order_result.get("orderID", order_result.get("orderId"))
+                logger.info(f"✅ Trade exécuté: order_id={order_id}, tx_hash={transaction_hash}")
+
+                # Reformater pour compatibilité avec le code existant
+                order_result = {
+                    "success": True,
+                    "orderId": order_id,
+                    "hash": transaction_hash
+                }
 
             # Création de la position ouverte
             open_position = OpenPosition(
@@ -287,6 +406,7 @@ class TradeExecutor:
                 unrealized_pnl_pct=0.0,
                 opened_at=datetime.now(),
                 transaction_hash=transaction_hash,
+                dry_run=self.dry_run,
                 resolution_datetime=signal.resolution_datetime
             )
 
@@ -294,6 +414,9 @@ class TradeExecutor:
             open_positions = await cache.get('open_positions', [])
             open_positions.append(open_position)
             await cache.set('open_positions', open_positions)
+
+            # Sauvegarde dans positions.json pour le dashboard
+            await self._save_position_to_file(open_position)
 
             # Ajout à la liste des trades exécutés
             executed_trades = await cache.get('executed_trades', [])

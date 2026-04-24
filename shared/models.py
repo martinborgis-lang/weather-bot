@@ -67,4 +67,5 @@ class OpenPosition:
     opened_at: datetime
     transaction_hash: Optional[str]  # None si DRY_RUN
     partial_sold: bool = False  # Track si 50% déjà vendus pour take profit
+    dry_run: bool = False  # True si position simulée
     resolution_datetime: Optional[datetime] = None
