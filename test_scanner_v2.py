@@ -53,7 +53,8 @@ async def test_scanner():
             for j, temp_range in enumerate(market.ranges[:5]):
                 logger.info(f"      {j+1}. {temp_range.label:<15} | "
                            f"Prix: {temp_range.current_price:.3f} | "
-                           f"Token: {temp_range.token_id[:12]}...")
+                           f"YES: {temp_range.token_id_yes[:8]}... | "
+                           f"NO: {temp_range.token_id_no[:8]}...")
 
             if len(market.ranges) > 5:
                 logger.info(f"      ... et {len(market.ranges) - 5} autres ranges")

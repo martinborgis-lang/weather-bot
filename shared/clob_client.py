@@ -319,6 +319,80 @@ class CLOBClient:
             logger.error(f"❌ Erreur post_market_order: {e}")
             return None
 
+    def post_sell_market_order(
+        self,
+        token_id: str,
+        shares: float,
+        neg_risk: bool = True,
+        tick_size: str = "0.01"
+    ) -> dict:
+        """
+        Vend des shares sur le CLOB en market order FAK.
+
+        Args:
+            token_id: ID du token à vendre (YES ou NO)
+            shares: Nombre de shares à vendre (sera arrondi à 2 décimales)
+            neg_risk: True si le market est neg-risk (défaut True pour markets température)
+            tick_size: Tick size du market (défaut "0.01")
+
+        Returns:
+            dict avec la réponse CLOB (incluant order_id si succès)
+
+        Raises:
+            Exception si l'ordre échoue
+        """
+        try:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType, PartialCreateOrderOptions
+            from py_clob_client.order_builder.constants import SELL
+
+            shares_rounded = round(shares, 2)
+            if shares_rounded <= 0:
+                raise ValueError(f"Shares à vendre doit être > 0, reçu {shares_rounded}")
+
+            logger.info(
+                f"📤 CLOB SELL: {shares_rounded} shares de {token_id[:20]}... "
+                f"(neg_risk={neg_risk}, tick={tick_size})"
+            )
+
+            market_order = MarketOrderArgs(
+                token_id=token_id,
+                amount=shares_rounded,
+                side=SELL,
+                order_type=OrderType.FAK
+            )
+
+            options = PartialCreateOrderOptions(
+                neg_risk=neg_risk,
+                tick_size=tick_size
+            )
+
+            start_time = time.time()
+            signed_order = self.client.create_market_order(market_order, options=options)
+            response = self.client.post_order(signed_order, OrderType.FAK)
+            elapsed = time.time() - start_time
+
+            if response and response.get("success"):
+                order_id = response.get("orderID", "?")
+                logger.info(f"✅ SELL exécuté en {elapsed:.2f}s: {order_id}")
+
+                # Enrichir le résultat avec nos métadonnées
+                response['executed_at'] = time.time()
+                response['execution_time_seconds'] = elapsed
+                response['executed_shares'] = shares_rounded
+                response['token_id'] = token_id
+                response['neg_risk'] = neg_risk
+                response['tick_size'] = tick_size
+                response['order_type'] = 'MARKET_SELL'
+
+                return response
+            else:
+                logger.error(f"❌ SELL échoué: {response}")
+                raise Exception(f"SELL order failed: {response}")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur post_sell_market_order: {e}")
+            raise
+
     def get_balance_usdc(self) -> Optional[float]:
         """Récupère le solde USDC disponible via appel direct web3"""
         try:

@@ -155,7 +155,7 @@ class PositionManager:
                 if market.condition_id == market_condition_id:
                     # Chercher le token_id dans les ranges
                     for temp_range in market.ranges:
-                        if getattr(temp_range, 'token_id', temp_range.label) == token_id:
+                        if temp_range.token_id_yes == token_id or temp_range.token_id_no == token_id:
                             return temp_range.current_price
 
                     # Fallback: retourner le prix du premier range si token_id non trouvé

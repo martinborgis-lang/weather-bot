@@ -161,7 +161,7 @@ class TradeExecutor:
             history_entry = {
                 'timestamp': trade_record['execution_time'].isoformat(),
                 'condition_id': signal.market.condition_id,
-                'token_id': getattr(signal.temperature_range, 'token_id', signal.temperature_range.label),
+                'token_id': signal.temperature_range.token_id_yes if signal.side == "YES" else signal.temperature_range.token_id_no,
                 'city': city,
                 'market_title': signal.market.title,
                 'temperature_label': signal.temperature_range.label,
@@ -370,11 +370,24 @@ class TradeExecutor:
                     logger.error("❌ CLOB client non initialisé pour mode LIVE")
                     return False
 
+                # FIX bug inversion YES/NO : sélectionner le bon token selon le side du signal
+                target_token_id = (
+                    signal.temperature_range.token_id_yes
+                    if signal.side == "YES"
+                    else signal.temperature_range.token_id_no
+                )
+                logger.info(
+                    f"🎯 TRADE: side={signal.side} | "
+                    f"token_id={target_token_id[:20]}... | "
+                    f"YES_token={signal.temperature_range.token_id_yes[:10]}... | "
+                    f"NO_token={signal.temperature_range.token_id_no[:10]}..."
+                )
+
                 # Utiliser le wrapper CLOB client
                 order_result = self.clob_client.post_market_order(
-                    token_id=signal.temperature_range.token_id,
+                    token_id=target_token_id,
                     size_usdc=signal.recommended_size_usdc,
-                    side='BUY'
+                    side='BUY'  # On achète toujours, mais le token diffère selon YES/NO
                 )
 
                 if not order_result:

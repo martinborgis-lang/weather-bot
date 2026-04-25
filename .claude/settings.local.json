@@ -1,9 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c \"\nfrom shared.clob_client import CLOBClient\nfrom py_clob_client.clob_types import OrderArgs, OrderType\nfrom py_clob_client.order_builder.constants import BUY\nprint(''✅ All imports successful - SDK pattern imports work'')\nprint(''OrderArgs available:'', hasattr(OrderArgs, ''__call__''))\nprint(''OrderType available:'', hasattr(OrderType, ''FOK''))\nprint(''BUY constant available:'', BUY)\n\")",
-      "Bash(python -c \"\nfrom shared.clob_client import CLOBClient\nfrom py_clob_client.clob_types import OrderArgs, OrderType\nfrom py_clob_client.order_builder.constants import BUY\nprint(''All imports successful - SDK pattern imports work'')\nprint(''OrderArgs callable:'', callable(OrderArgs))\nprint(''OrderType.FOK exists:'', hasattr(OrderType, ''FOK''))\nprint(''BUY constant value:'', BUY)\n\")",
-      "Bash(python -c \"\nfrom py_clob_client.clob_types import OrderArgs\nfrom py_clob_client.order_builder.constants import BUY\n\n# Test creating OrderArgs object with sample values\ntry:\n    order_args = OrderArgs(\n        price=0.5,\n        size=2.0,\n        side=BUY,\n        token_id=''12345'',\n    )\n    print(''OrderArgs creation successful'')\n    print(''Price:'', order_args.price)\n    print(''Size:'', order_args.size)\n    print(''Side:'', order_args.side)\n    print(''Token ID:'', order_args.token_id)\nexcept Exception as e:\n    print(''Error creating OrderArgs:'', e)\n\")"
+      "Bash(python -c \"import tp_monitor; print(''OK - tp_monitor import success'')\")"
     ],
     "deny": [],
     "ask": []

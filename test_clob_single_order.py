@@ -96,13 +96,14 @@ async def find_good_test_market():
         logger.info(f"   Titre: {market.title}")
         logger.info(f"   Range: {temp_range.label}")
         logger.info(f"   Prix: ${price:.4f}")
-        logger.info(f"   Token ID: {temp_range.token_id}")
+        logger.info(f"   Token YES: {temp_range.token_id_yes}")
+        logger.info(f"   Token NO: {temp_range.token_id_no}")
         logger.info(f"   Liquidité: ${market.liquidity_usdc:.0f}")
 
         return {
             'market': market,
             'temp_range': temp_range,
-            'token_id': temp_range.token_id,
+            'token_id': temp_range.token_id_yes,  # Pour les tests, utilise YES par défaut
             'price': price
         }
 

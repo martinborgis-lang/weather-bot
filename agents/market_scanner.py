@@ -149,9 +149,21 @@ class MarketScanner:
         clob_token_ids_str = market.get('clobTokenIds', '[]')
         try:
             clob_token_ids = json.loads(clob_token_ids_str)
-            if not clob_token_ids:
-                raise ValueError("Pas de clobTokenIds")
-            token_id = clob_token_ids[0]  # Token YES
+            if not clob_token_ids or len(clob_token_ids) < 2:
+                raise ValueError(f"clobTokenIds invalide ou incomplet: {clob_token_ids}")
+
+            # FIX bug inversion YES/NO : on stocke les 2 token_ids
+            # clob_token_ids[0] = YES token, clob_token_ids[1] = NO token
+            # Vérification via outcomes pour être sûr de l'ordre
+            outcomes_str = market.get('outcomes', '["Yes","No"]')
+            outcomes = json.loads(outcomes_str) if isinstance(outcomes_str, str) else outcomes_str
+            if outcomes[0].lower() == "yes":
+                token_id_yes = clob_token_ids[0]
+                token_id_no = clob_token_ids[1]
+            else:
+                # Cas inverse (rare) : outcomes[0]="No"
+                token_id_yes = clob_token_ids[1]
+                token_id_no = clob_token_ids[0]
         except (json.JSONDecodeError, IndexError) as e:
             raise ValueError(f"Erreur parsing clobTokenIds: {e}")
 
@@ -171,7 +183,8 @@ class MarketScanner:
             label=label,
             min_temp=min_temp,
             max_temp=max_temp,
-            token_id=token_id,
+            token_id_yes=token_id_yes,
+            token_id_no=token_id_no,
             current_price=current_price
         )
 

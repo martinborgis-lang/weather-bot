@@ -172,7 +172,7 @@ async def save_signals_to_file(signals: List[TradeSignal]):
             signal_dict = {
                 'timestamp': timestamp,
                 'condition_id': signal.market.condition_id,
-                'token_id': getattr(signal.temperature_range, 'token_id', signal.temperature_range.label),
+                'token_id': signal.temperature_range.token_id_yes if signal.side == "YES" else signal.temperature_range.token_id_no,
                 'city': city,
                 'market_title': signal.market.title,
                 'temperature_label': signal.temperature_range.label,

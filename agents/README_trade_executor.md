@@ -110,7 +110,7 @@ Boucle principale:
 
 ```python
 order_params = {
-    "token_id": signal.temperature_range.token_id,
+    "token_id": signal.temperature_range.token_id_yes if signal.side == "YES" else signal.temperature_range.token_id_no,
     "price": signal.temperature_range.current_price,
     "size": recommended_size_usdc / current_price,
     "side": "BUY",

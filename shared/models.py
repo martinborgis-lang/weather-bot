@@ -8,7 +8,8 @@ class TemperatureRange:
     label: str              # "17°C"
     min_temp: float         # 17.0
     max_temp: float         # 17.999
-    token_id: str           # CLOB token_id YES
+    token_id_yes: str       # CLOB token_id du outcome YES
+    token_id_no: str        # CLOB token_id du outcome NO
     current_price: float    # prix actuel du token YES
 
 @dataclass
